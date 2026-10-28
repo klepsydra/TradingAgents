@@ -90,9 +90,9 @@ def parse_ticker(value: str) -> str:
 def parse_analysis_date(value: str) -> str:
     """An analysis date as YYYY-MM-DD, market-today or earlier.
 
-    "Today" follows ``TRADINGAGENTS_MARKET_TZ`` (default America/New_York), not
-    the host's ``date.today()``, so site Analyze near midnight UTC/ET is not
-    rejected when the machine is still on the previous calendar day in PT.
+    "Today" follows the Webbit / agentRobin operator zone
+    (``AGENTROBIN_TIMEZONE``, default America/Los_Angeles), overridable with
+    ``TRADINGAGENTS_MARKET_TZ`` — not a bare host ``date.today()``.
     """
     from tradingagents.market_time import market_today
 
