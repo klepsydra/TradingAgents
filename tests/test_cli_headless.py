@@ -32,7 +32,7 @@ class TestFlagValues:
         from tradingagents.market_time import market_today
 
         assert prompts.parse_analysis_date("2026-09-23") == "2026-09-23"
-        # Market calendar (not host date.today) — site --date uses America/New_York.
+        # Operator calendar (not bare host date.today) — site --date uses AGENTROBIN_TIMEZONE / LA.
         assert prompts.parse_analysis_date(market_today().isoformat()) == market_today().isoformat()
         tomorrow = (market_today() + datetime.timedelta(days=1)).isoformat()
         with pytest.raises(ValueError, match="future"):

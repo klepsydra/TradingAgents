@@ -1,0 +1,25 @@
+[Unit]
+Description=TradingAgents site (tradingagents.quiltyapp.com)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/marckoby/dev/TradingAgents
+Environment=TRADINGAGENTS_ROOT=/home/marckoby/dev/TradingAgents
+Environment=AGENTROBIN_ROOT=/home/marckoby/dev/agentRobin
+Environment=TRADINGAGENTS_SITE_PORT=8794
+Environment=TRADINGAGENTS_PUBLIC_URL=https://TradingAgents.quiltyapp.com
+Environment=TRADINGAGENTS_SITE_AUTH=sso
+Environment=PYTHONUNBUFFERED=1
+# Same operator zone as Webbit / agentRobin (AgentrobinTimezone default).
+Environment=AGENTROBIN_TIMEZONE=America/Los_Angeles
+Environment=TZ=America/Los_Angeles
+# Load LLM keys without printing them
+EnvironmentFile=-/home/marckoby/dev/TradingAgents/.env
+ExecStart=/home/marckoby/dev/TradingAgents/.venv/bin/python3 /home/marckoby/dev/TradingAgents/scripts/site_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
