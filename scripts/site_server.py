@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import html
 import json
 import os
 import re
@@ -567,11 +568,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             return
+        # Preserve deep links (e.g. /runs/<id>/report) the same as GET auth.
         base = self._public_base()
+        ret = self.path if self.path.startswith("/") else "/"
         self.send_response(302)
         self.send_header(
             "Location",
-            f"{SSO_URL}?return_to={urllib.parse.quote(base + '/', safe='')}",
+            f"{SSO_URL}?return_to={urllib.parse.quote(base + ret, safe='')}",
         )
         self.end_headers()
 
@@ -722,7 +725,32 @@ class Handler(BaseHTTPRequestHandler):
             if not html_path.is_file():
                 self._json({"error": "report missing on disk"}, status=404)
                 return
-            self._html(html_path.read_text(encoding="utf-8", errors="replace"))
+            body = html_path.read_text(encoding="utf-8", errors="replace")
+            run_id = m.group(1)
+            ticker = html.escape(str(run.get("ticker") or ""))
+            rating = html.escape(str(run.get("rating") or run.get("status") or ""))
+            banner = (
+                '<div id="ta-report-nav" style="position:sticky;top:0;z-index:9999;'
+                "font:600 13px/1.4 system-ui,sans-serif;padding:0.55rem 1rem;"
+                "background:#0f1419;color:#e7eef7;border-bottom:1px solid #2a3542;"
+                'display:flex;gap:1rem;flex-wrap:wrap;align-items:center">'
+                f'<a href="/runs/{html.escape(run_id)}" style="color:#3d9cf0;text-decoration:none">'
+                "← Run details</a>"
+                f'<span style="color:#8b9bb0">{ticker} · {rating} · full research report</span>'
+                '<a href="/" style="color:#8b9bb0;margin-left:auto;text-decoration:none">TradingAgents</a>'
+                "</div>"
+            )
+            if "<body" in body.lower():
+                body = re.sub(
+                    r"(<body[^>]*>)",
+                    r"\1" + banner,
+                    body,
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
+            else:
+                body = banner + body
+            self._html(body)
             return
 
         m = re.fullmatch(r"/runs/([^/]+)/?", path)

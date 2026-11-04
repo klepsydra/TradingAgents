@@ -136,13 +136,23 @@
       return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
+    function pastLinks(r) {
+      const runHref = `/runs/${esc(r.id)}`;
+      const reportHref = `/runs/${esc(r.id)}/report`;
+      const details = `<a href="${runHref}">Details</a>`;
+      const report = (r.has_report || r.report_url)
+        ? ` · <a href="${reportHref}">Full report</a>`
+        : '';
+      return details + report;
+    }
+
     function renderPast(rows) {
       const wrap = $('pastWrap');
       if (!rows || !rows.length) { wrap.hidden = true; return; }
       wrap.hidden = false;
       $('pastSummary').textContent = `Past reports on ${BOOT.run.ticker || 'ticker'} (${rows.length})`;
       $('pastTable').innerHTML = `<table>
-        <thead><tr><th>When</th><th>Rating</th><th>Account</th><th>Status</th><th>Conclusion</th></tr></thead>
+        <thead><tr><th>When</th><th>Rating</th><th>Account</th><th>Status</th><th>Conclusion</th><th>Links</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr>
             <td><a href="/runs/${esc(r.id)}">${esc((r.created_at || '').replace('T',' ').slice(0,19))}</a></td>
@@ -150,6 +160,7 @@
             <td>${esc(r.account || '—')}</td>
             <td>${pill(r.status)}</td>
             <td class="meta">${esc(r.conclusion || r.error || '')}</td>
+            <td>${pastLinks(r)}</td>
           </tr>`).join('')}</tbody></table>`;
     }
 
@@ -178,8 +189,11 @@
         ['Finished', run.finished_at || '—'],
         ['Exit', run.exit_code ?? '—'],
       ].map(([k,v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
-      if (run.report_url || run.has_report) {
-        $('reportLink').innerHTML = `<a href="${esc(run.report_url || ('/runs/' + run.id + '/report'))}" target="_blank" rel="noopener">Open full saved HTML report</a>`;
+      if (run.report_url || run.report_html || run.has_report) {
+        const href = run.report_url || (`/runs/${run.id}/report`);
+        $('reportLink').innerHTML =
+          `<a href="${esc(href)}"><strong>Full research report</strong></a>` +
+          ` <span class="meta">— analysts, debate, trader, risk, portfolio decision</span>`;
       } else {
         $('reportLink').textContent = '';
       }

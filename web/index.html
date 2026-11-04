@@ -215,13 +215,21 @@
       }
     }
 
+    function pastLinks(r) {
+      const details = `<a href="/runs/${esc(r.id)}">Details</a>`;
+      const report = (r.has_report || r.report_url)
+        ? ` · <a href="/runs/${esc(r.id)}/report">Full report</a>`
+        : '';
+      return details + report;
+    }
+
     function renderPast(ticker, rows) {
       const wrap = $('pastWrap');
       if (!ticker || !rows || !rows.length) { wrap.hidden = true; return; }
       wrap.hidden = false;
       $('pastSummary').textContent = `Past reports on ${ticker} (${rows.length})`;
       $('pastTable').innerHTML = `<table>
-        <thead><tr><th>When</th><th>Rating</th><th>Account</th><th>Status</th><th>Conclusion</th></tr></thead>
+        <thead><tr><th>When</th><th>Rating</th><th>Account</th><th>Status</th><th>Conclusion</th><th>Links</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr>
             <td><a href="/runs/${esc(r.id)}">${esc((r.created_at || '').replace('T',' ').slice(0,19))}</a></td>
@@ -229,6 +237,7 @@
             <td>${esc(r.account || '—')}</td>
             <td>${pill(r.status)}</td>
             <td class="meta">${esc(r.conclusion || r.error || '')}</td>
+            <td>${pastLinks(r)}</td>
           </tr>`).join('')}</tbody></table>`;
     }
 
