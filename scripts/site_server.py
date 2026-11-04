@@ -356,8 +356,9 @@ def load_site_env() -> dict[str, str]:
         ("TRADINGAGENTS_MAX_DEBATE_ROUNDS", "1"),
         ("TRADINGAGENTS_MAX_RISK_ROUNDS", "1"),
         ("TRADINGAGENTS_LLM_PROVIDER", "openai"),
-        ("TRADINGAGENTS_DEEP_THINK_LLM", "gpt-4o"),
-        ("TRADINGAGENTS_QUICK_THINK_LLM", "gpt-4o-mini"),
+        # Match tradingagents.default_config + model_catalog (gpt-4o retired).
+        ("TRADINGAGENTS_DEEP_THINK_LLM", "gpt-6-sol"),
+        ("TRADINGAGENTS_QUICK_THINK_LLM", "gpt-6-luna"),
         ("TRADINGAGENTS_NO_UPDATE_CHECK", "1"),
     ):
         if _env_blank(env, key):
