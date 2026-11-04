@@ -6,6 +6,12 @@ webbit Spina SSO → /sso/callback (shared agentRobin state/agent_ops/sso_secret
 
 Deep-link autolaunch (from webbit quote pages):
   GET /start?ticker=VOO&account=FakeAcct.01  → queues research, redirects to /runs/<id>
+
+Report summary / cadence APIs (session cookie or service token):
+  GET  /api/reports/latest?ticker=VOO
+  POST /api/reports/refresh  JSON {ticker, account?}
+Service token: TRADINGAGENTS_SERVICE_TOKEN or AGENTROBIN_TRADINGAGENTS_BRIDGE_TOKEN
+(header X-TradingAgents-Service-Token / X-TradingAgents-Bridge-Token / Bearer).
 """
 
 from __future__ import annotations
@@ -178,8 +184,10 @@ def list_runs(*, ticker: str | None = None, limit: int = 80) -> list[dict]:
 
 def summarize_run(run: dict) -> dict:
     """Compact fields for tables / API lists."""
+    run_id = run.get("id")
+    report_path = f"/runs/{run_id}/report" if run_id and (run.get("report_html") or run.get("report_md")) else None
     return {
-        "id": run.get("id"),
+        "id": run_id,
         "status": run.get("status"),
         "ticker": run.get("ticker"),
         "account": run.get("account"),
@@ -191,7 +199,42 @@ def summarize_run(run: dict) -> dict:
         "date": run.get("date"),
         "error": (run.get("error") or "")[:200] or None,
         "has_report": bool(run.get("report_html") or run.get("report_md")),
+        "report_url": run.get("report_url") or report_path,
+        "run_url": f"/runs/{run_id}" if run_id else None,
+        "public_url": f"{PUBLIC_URL}/runs/{run_id}" if run_id else None,
     }
+
+
+def latest_report_for_ticker(ticker: str) -> dict | None:
+    """Most recent completed (ok) run for ticker, else newest run of any status."""
+    ticker = ticker.strip().upper()
+    if not ticker:
+        return None
+    rows = list_runs(ticker=ticker, limit=80)
+    for row in rows:
+        if row.get("status") == "ok" and (row.get("rating") or row.get("has_report") or row.get("conclusion")):
+            return row
+    for row in rows:
+        if row.get("status") == "ok":
+            return row
+    return rows[0] if rows else None
+
+
+def service_token() -> str:
+    """Shared secret for agentRobin/webbit → site API (cadence + quote summary)."""
+    for key in (
+        "TRADINGAGENTS_SERVICE_TOKEN",
+        "AGENTROBIN_TRADINGAGENTS_BRIDGE_TOKEN",
+        "AGENTROBIN_PROXY_AUTH_TOKEN",
+    ):
+        val = os.environ.get(key, "").strip()
+        if val:
+            return val
+    # Fall back to SSO secret so localhost callers with agent_ops access still work.
+    try:
+        return sso_secret()
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _extract_rating(text: str) -> str | None:
@@ -465,10 +508,30 @@ class Handler(BaseHTTPRequestHandler):
             f"Max-Age={30 * 24 * 3600}; Secure; SameSite=Lax"
         )
 
+    def _service_authorized(self) -> bool:
+        expected = service_token()
+        if not expected:
+            return False
+        provided = self.headers.get("X-TradingAgents-Service-Token") or self.headers.get(
+            "X-TradingAgents-Bridge-Token"
+        )
+        if not provided:
+            auth = self.headers.get("Authorization") or ""
+            if auth.lower().startswith("bearer "):
+                provided = auth[7:].strip()
+        if not provided:
+            return False
+        try:
+            return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _require_session(self, api: bool = False) -> dict | None:
         user = self._session_user()
         if user:
             return user
+        if api and self._service_authorized():
+            return {"email": "service-token", "service": True}
         base = self._public_base()
         path = self.path if self.path.startswith("/") else "/"
         login = f"{SSO_URL}?return_to={urllib.parse.quote(base + path, safe='')}"
@@ -617,6 +680,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"runs": list_runs(ticker=ticker)})
             return
 
+        if path in ("/api/reports/latest", "/api/ticker/latest"):
+            if not self._require_session(api=True):
+                return
+            ticker = (qs.get("ticker") or qs.get("symbol") or [""])[0].strip().upper()
+            if not ticker:
+                self._json({"error": "ticker required"}, status=422)
+                return
+            latest = latest_report_for_ticker(ticker)
+            self._json(
+                {
+                    "ok": True,
+                    "ticker": ticker,
+                    "report": latest,
+                    "public_base": PUBLIC_URL,
+                }
+            )
+            return
+
         if path.startswith("/api/runs/"):
             if not self._require_session(api=True):
                 return
@@ -678,7 +759,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
-        if path != "/api/analyze":
+        if path not in ("/api/analyze", "/api/reports/refresh", "/api/ticker/refresh"):
             self._json({"error": "not found"}, status=404)
             return
         user = self._require_session(api=True)
@@ -690,34 +771,42 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"invalid JSON: {exc}"}, status=422)
             return
 
-        ticker = str(body.get("ticker") or "").strip().upper()
+        qs = urllib.parse.parse_qs(parsed.query)
+        ticker = str(body.get("ticker") or body.get("symbol") or (qs.get("ticker") or [""])[0]).strip().upper()
         account = str(body.get("account") or "").strip() or self._sticky_account()
         analysts = str(body.get("analysts") or "market,news,fundamentals").strip()
         if not ticker:
             self._json({"error": "ticker required"}, status=422)
             return
         date = str(body.get("date") or "").strip() or None
+        # Background refresh from quote pages / cadence cron: do not require a human viewer.
+        viewer = user.get("email") if not user.get("service") else str(body.get("viewer") or "cadence")
         run = queue_analyze(
             ticker=ticker,
             account=account,
             analysts=analysts,
-            viewer=user.get("email"),
+            viewer=viewer,
             analysis_date=date,
         )
-        if account:
-            # Mirror sticky account for subsequent visits.
+        payload = {
+            "ok": True,
+            "queued": True,
+            "run": summarize_run(run),
+            "redirect": f"/runs/{run['id']}",
+            "public_url": f"{PUBLIC_URL}/runs/{run['id']}",
+        }
+        if account and path == "/api/analyze" and not user.get("service"):
+            # Mirror sticky account for subsequent browser visits.
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Set-Cookie", self._account_cookie(account))
-            body_bytes = json.dumps({"ok": True, "run": run, "redirect": f"/runs/{run['id']}"}).encode(
-                "utf-8"
-            )
+            body_bytes = json.dumps(payload).encode("utf-8")
             self.send_header("Content-Length", str(len(body_bytes)))
             self.end_headers()
             self.wfile.write(body_bytes)
             return
-        self._json({"ok": True, "run": run, "redirect": f"/runs/{run['id']}"})
+        self._json(payload)
 
 
 def main() -> None:
