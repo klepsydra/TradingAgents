@@ -238,13 +238,21 @@
     <section>
       <h2>Run analysis</h2>
       <p class="meta" style="margin:0 0 0.8rem">
-        Pick a brokerage/paper account (loads its whole book as context), then enter
+        Pick a brokerage/paper <strong>Account</strong> or a <strong>Watchlist</strong>
+        (alternative — loads that list into the portfolio snapshot), then enter
         <strong>one symbol to decide on</strong> — e.g. a holding like <code>VOO</code>,
         or a candidate like <code>SPY</code>. Quote-page deep links auto-start research
         on <code>/start</code> and open the live run page.
       </p>
       <label for="account">Account</label>
       <select id="account"></select>
+      <label for="watchlist">Watchlist</label>
+      <select id="watchlist">
+        <option value="">— none (use Account) —</option>
+      </select>
+      <p class="meta" id="watchlistHint" style="margin:0.25rem 0 0">
+        Live + paper + FakeAcct site books · label = acct :: list [#]
+      </p>
       <label for="ticker">Ticker (symbol under review)</label>
       <input id="ticker" value="" placeholder="e.g. SPY, VOO, AAPL, NVDA" autocomplete="off" />
       <label for="analysts">Analysts</label>
@@ -275,8 +283,10 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const ACCOUNT_KEY = 'tradingagents_last_account';
+    const WATCHLIST_KEY = 'tradingagents_last_watchlist';
     let runsTable = null;
     let runsFilterTicker = '';
+    let watchlistsCache = [];
 
     async function api(path, opts) {
       const res = await fetch(path, opts);
@@ -317,14 +327,38 @@
     function renderAccounts(accounts, sticky) {
       const sel = $('account');
       const chosen = preferredAccount(accounts, sticky);
-      sel.innerHTML = accounts.map(a =>
-        `<option value="${esc(a.account)}" ${a.account === chosen ? 'selected' : ''}>${esc(a.label || a.account)} ${a.paper ? '(paper)' : '(live)'}</option>`
-      ).join('');
-      if (chosen) {
+      const wlSelected = ($('watchlist').value || '').trim();
+      sel.innerHTML =
+        `<option value="">— none —</option>` +
+        accounts.map(a =>
+          `<option value="${esc(a.account)}" ${!wlSelected && a.account === chosen ? 'selected' : ''}>${esc(a.label || a.account)} ${a.paper ? '(paper)' : '(live)'}</option>`
+        ).join('');
+      if (!wlSelected && chosen) {
         sel.value = chosen;
         localStorage.setItem(ACCOUNT_KEY, chosen);
+      } else if (wlSelected) {
+        sel.value = '';
       }
-      if (accounts.length) loadPortfolio();
+    }
+
+    function renderWatchlists(rows) {
+      watchlistsCache = rows || [];
+      const sel = $('watchlist');
+      const qs = new URLSearchParams(location.search);
+      const fromQs = (qs.get('watchlist') || '').trim();
+      const fromStore = (localStorage.getItem(WATCHLIST_KEY) || '').trim();
+      const preferred = [fromQs, fromStore].find(id => watchlistsCache.some(w => w.id === id)) || '';
+      sel.innerHTML =
+        `<option value="">— none (use Account) —</option>` +
+        watchlistsCache.map(w =>
+          `<option value="${esc(w.id)}" ${w.id === preferred ? 'selected' : ''}>${esc(w.label || `${w.account_label} :: ${w.name} [${w.item_count}]`)}</option>`
+        ).join('');
+      $('watchlistHint').textContent =
+        `${watchlistsCache.length} lists from live + paper + FakeAcct · acct :: name [#]`;
+      if (preferred) {
+        sel.value = preferred;
+        $('account').value = '';
+      }
     }
 
     function markActiveHolding(ticker) {
@@ -343,33 +377,57 @@
       loadRuns(sym);
     }
 
+    function renderPortfolioBook(p, sourceLabel) {
+      const positions = p.positions || [];
+      const active = currentTicker();
+      const bits = [
+        sourceLabel ? `<div class="port-meta">${esc(sourceLabel)}</div>` : '',
+        `<div class="port-meta">cash: ${esc(p.cash)} ${esc(p.currency || '')}</div>`,
+        `<div class="port-meta">${sourceLabel && sourceLabel.includes('Watchlist') ? 'symbols' : 'positions'}: ${positions.length}</div>`,
+        ...positions.slice(0, 80).map(x => {
+          const sym = String(x.ticker || '').toUpperCase();
+          const qty = x.quantity;
+          const label = (qty === 0 || qty === '0' || qty === 0.0)
+            ? `${sym.padEnd(10)} (watch)`
+            : `${sym.padEnd(10)} qty=${qty} avg=${x.average_price ?? '—'}`;
+          const cls = sym && sym === active ? 'port-row active' : 'port-row';
+          return `<button type="button" class="${cls}" data-ticker="${esc(sym)}">${esc(label)}</button>`;
+        })
+      ];
+      if (positions.length > 80) {
+        bits.push(`<div class="port-meta">… +${positions.length - 80} more</div>`);
+      }
+      $('portfolio').innerHTML = bits.filter(Boolean).join('');
+      $('portfolio').querySelectorAll('.port-row').forEach(btn => {
+        btn.addEventListener('click', () => selectHolding(btn.dataset.ticker));
+      });
+    }
+
     async function loadPortfolio() {
-      const account = $('account').value;
-      if (!account) return;
+      const watchlistId = ($('watchlist').value || '').trim();
+      const account = ($('account').value || '').trim();
+      if (watchlistId) {
+        localStorage.setItem(WATCHLIST_KEY, watchlistId);
+        $('portfolio').textContent = 'Loading watchlist…';
+        try {
+          const data = await api('/api/portfolio?watchlist=' + encodeURIComponent(watchlistId));
+          const label = (data.watchlist && data.watchlist.label) || watchlistId;
+          renderPortfolioBook(data.portfolio || {}, 'Watchlist · ' + label);
+        } catch (e) {
+          $('portfolio').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        }
+        return;
+      }
+      if (!account) {
+        $('portfolio').textContent = 'Select an account or watchlist…';
+        return;
+      }
       localStorage.setItem(ACCOUNT_KEY, account);
+      localStorage.removeItem(WATCHLIST_KEY);
       $('portfolio').textContent = 'Loading…';
       try {
         const data = await api('/api/portfolio?account=' + encodeURIComponent(account));
-        const p = data.portfolio;
-        const positions = p.positions || [];
-        const active = currentTicker();
-        const bits = [
-          `<div class="port-meta">cash: ${esc(p.cash)} ${esc(p.currency || '')}</div>`,
-          `<div class="port-meta">positions: ${positions.length}</div>`,
-          ...positions.slice(0, 40).map(x => {
-            const sym = String(x.ticker || '').toUpperCase();
-            const label = `${sym.padEnd(10)} qty=${x.quantity} avg=${x.average_price ?? '—'}`;
-            const cls = sym && sym === active ? 'port-row active' : 'port-row';
-            return `<button type="button" class="${cls}" data-ticker="${esc(sym)}">${esc(label)}</button>`;
-          })
-        ];
-        if (positions.length > 40) {
-          bits.push(`<div class="port-meta">… +${positions.length - 40} more</div>`);
-        }
-        $('portfolio').innerHTML = bits.join('');
-        $('portfolio').querySelectorAll('.port-row').forEach(btn => {
-          btn.addEventListener('click', () => selectHolding(btn.dataset.ticker));
-        });
+        renderPortfolioBook(data.portfolio || {}, 'Account · ' + account);
       } catch (e) {
         $('portfolio').innerHTML = `<span class="err">${esc(e.message)}</span>`;
       }
@@ -526,7 +584,22 @@
       loadRuns(ticker);
     }
 
-    $('account').onchange = loadPortfolio;
+    $('account').onchange = () => {
+      // Account wins over watchlist when explicitly chosen.
+      if (($('account').value || '').trim()) {
+        $('watchlist').value = '';
+        localStorage.removeItem(WATCHLIST_KEY);
+      }
+      loadPortfolio();
+    };
+    $('watchlist').onchange = () => {
+      if (($('watchlist').value || '').trim()) {
+        $('account').value = '';
+      } else {
+        localStorage.removeItem(WATCHLIST_KEY);
+      }
+      loadPortfolio();
+    };
     $('ticker').addEventListener('change', onTickerEdited);
     $('ticker').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -548,17 +621,25 @@
         $('ticker').focus();
         return;
       }
+      const watchlistId = ($('watchlist').value || '').trim();
+      const account = ($('account').value || '').trim();
+      if (!watchlistId && !account) {
+        $('runStatus').innerHTML = '<span class="err">Select an Account or a Watchlist first.</span>';
+        return;
+      }
       $('runBtn').disabled = true;
       $('runStatus').textContent = 'Launching research…';
       try {
+        const payload = {
+          ticker,
+          analysts: $('analysts').value
+        };
+        if (watchlistId) payload.watchlist_id = watchlistId;
+        else payload.account = account;
         const data = await api('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ticker,
-            account: $('account').value,
-            analysts: $('analysts').value
-          })
+          body: JSON.stringify(payload)
         });
         if (data.redirect) {
           location.href = data.redirect;
@@ -583,7 +664,16 @@
     (async () => {
       const data = await api('/api/accounts');
       $('viewer').textContent = (data.viewer && data.viewer.email) || '';
+      let watchlists = [];
+      try {
+        const wl = await api('/api/watchlists');
+        watchlists = wl.watchlists || [];
+      } catch (e) {
+        $('watchlistHint').textContent = 'Watchlists unavailable: ' + e.message;
+      }
+      renderWatchlists(watchlists);
       renderAccounts(data.accounts || [], data.sticky_account || '');
+      await loadPortfolio();
       const q = applyQueryParams();
       const ticker = q.ticker || currentTicker();
       markActiveHolding(ticker);
