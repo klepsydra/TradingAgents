@@ -259,7 +259,7 @@
         <option value="">— none (use Account) —</option>
       </select>
       <p class="meta" id="watchlistHint" style="margin:0.25rem 0 0">
-        Live + paper + FakeAcct site books · label = acct :: list [#]
+        Live + paper + FakeAcct site books · label = Brokerage :: acct :: list
       </p>
       <label for="ticker">Ticker (symbol under review)</label>
       <input id="ticker" value="" placeholder="e.g. SPY, VOO, AAPL, NVDA" autocomplete="off" />
@@ -362,10 +362,10 @@
       sel.innerHTML =
         `<option value="">— none (use Account) —</option>` +
         watchlistsCache.map(w =>
-          `<option value="${esc(w.id)}" ${w.id === preferred ? 'selected' : ''}>${esc(w.label || `${w.account_label} :: ${w.name} [${w.item_count}]`)}</option>`
+          `<option value="${esc(w.id)}" ${w.id === preferred ? 'selected' : ''}>${esc(w.label || `${w.broker || 'Broker'} :: ${w.account_label || w.account || '?'} :: ${w.name || 'Watchlist'}`)}</option>`
         ).join('');
       $('watchlistHint').textContent =
-        `${watchlistsCache.length} lists from live + paper + FakeAcct · acct :: name [#]`;
+        `${watchlistsCache.length} lists · Brokerage :: acctName :: WatchlistName`;
       if (preferred) {
         sel.value = preferred;
         $('account').value = '';
