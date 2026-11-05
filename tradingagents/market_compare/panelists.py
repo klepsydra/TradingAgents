@@ -170,6 +170,8 @@ def _cursor_agent_chat(*, api_key: str, prompt: str, timeout: float = 180.0) -> 
         "text",
         "--mode",
         "ask",
+        "--trust",
+        "--force",
         "--api-key",
         api_key,
         prompt,
