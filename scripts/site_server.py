@@ -10,6 +10,10 @@ Deep-link autolaunch (from webbit quote pages):
 Report summary / cadence APIs (session cookie or service token):
   GET  /api/reports/latest?ticker=VOO
   POST /api/reports/refresh  JSON {ticker, account?}
+Market-analyst compare (multi-LLM panel vs street/Cortex sources):
+  GET  /api/runs/<id>/market-compare
+  POST /api/runs/<id>/market-compare  JSON {force?}
+  (also auto-queued after a successful analyze; shown on /runs/<id> and /report)
 Service token: TRADINGAGENTS_SERVICE_TOKEN or AGENTROBIN_TRADINGAGENTS_BRIDGE_TOKEN
 (header X-TradingAgents-Service-Token / X-TradingAgents-Bridge-Token / Bearer).
 """
@@ -34,6 +38,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tradingagents.market_time import market_today_iso
+from tradingagents.market_compare.pipeline import run_market_compare
+from tradingagents.market_compare.render import (
+    render_market_compare_section,
+    render_report_compare_banner,
+)
 
 ROOT = Path(os.environ.get("TRADINGAGENTS_ROOT", Path(__file__).resolve().parents[1]))
 AGENTROBIN_ROOT = Path(
@@ -439,8 +448,55 @@ def queue_analyze(
         run["finished_at"] = iso_now()
         enrich_run_artifacts(run)
         save_run(run)
+        if run.get("status") == "ok":
+            queue_market_compare(run["id"])
 
     threading.Thread(target=worker, daemon=True).start()
+    return run
+
+
+def queue_market_compare(run_id: str, *, force: bool = False) -> dict | None:
+    """Background multi-LLM street-vs-TradingAgents study for a finished run."""
+    run = load_run(run_id)
+    if not run:
+        return None
+    mc = run.get("market_compare") or {}
+    if not force and mc.get("status") in ("running", "ok", "failed"):
+        return run
+    run["market_compare"] = {
+        **mc,
+        "status": "running",
+        "started_at": iso_now(),
+        "error": None,
+    }
+    save_run(run)
+
+    def worker() -> None:
+        current = load_run(run_id) or run
+        try:
+            # Ensure site .env keys (CURSOR/XAI/GEMINI/…) are visible to panelists.
+            os.environ.update(
+                {
+                    k: v
+                    for k, v in load_site_env().items()
+                    if k.endswith("_API_KEY")
+                    or k.endswith("_API_KEY2")
+                    or k.endswith("_API_KEY3")
+                    or k in ("CURSOR_API_KEY", "DEEPSEEK_API_URL", "GOOGLE_API_KEY")
+                    or k.startswith("TRADINGAGENTS_MARKET_COMPARE_")
+                }
+            )
+            run_market_compare(current)
+        except Exception as exc:  # noqa: BLE001
+            current["market_compare"] = {
+                **(current.get("market_compare") or {}),
+                "status": "failed",
+                "error": str(exc)[:1500],
+                "finished_at": iso_now(),
+            }
+        save_run(current)
+
+    threading.Thread(target=worker, daemon=True, name=f"market-compare-{run_id}").start()
     return run
 
 
@@ -559,7 +615,8 @@ class Handler(BaseHTTPRequestHandler):
             "past": past,
             "viewer": self._session_user() or {},
         }
-        return tpl.replace("__BOOTSTRAP__", json.dumps(payload))
+        page = tpl.replace("__BOOTSTRAP__", json.dumps(payload))
+        return page.replace("<!--__MARKET_COMPARE__-->", render_market_compare_section(run))
 
     def do_HEAD(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
@@ -702,6 +759,17 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        m = re.fullmatch(r"/api/runs/([^/]+)/market-compare", path)
+        if m:
+            if not self._require_session(api=True):
+                return
+            run = load_run(m.group(1))
+            if not run:
+                self._json({"error": "not found"}, status=404)
+                return
+            self._json({"ok": True, "market_compare": run.get("market_compare"), "run_id": run.get("id")})
+            return
+
         if path.startswith("/api/runs/"):
             if not self._require_session(api=True):
                 return
@@ -710,6 +778,11 @@ class Handler(BaseHTTPRequestHandler):
             if not run:
                 self._json({"error": "not found"}, status=404)
                 return
+            # Kick compare for legacy completed runs that never got one.
+            mc = run.get("market_compare") or {}
+            if run.get("status") == "ok" and not mc.get("status"):
+                queue_market_compare(run_id)
+                run = load_run(run_id) or run
             self._json(run)
             return
 
@@ -725,6 +798,11 @@ class Handler(BaseHTTPRequestHandler):
             if not html_path.is_file():
                 self._json({"error": "report missing on disk"}, status=404)
                 return
+            # Autostart compare for older reports so the injected section can fill in.
+            mc = run.get("market_compare") or {}
+            if run.get("status") == "ok" and not mc.get("status"):
+                queue_market_compare(run["id"])
+                run = load_run(run["id"]) or run
             body = html_path.read_text(encoding="utf-8", errors="replace")
             run_id = m.group(1)
             ticker = html.escape(str(run.get("ticker") or ""))
@@ -740,16 +818,18 @@ class Handler(BaseHTTPRequestHandler):
                 '<a href="/" style="color:#8b9bb0;margin-left:auto;text-decoration:none">TradingAgents</a>'
                 "</div>"
             )
+            compare_block = render_report_compare_banner(run)
+            inject = banner + compare_block
             if "<body" in body.lower():
                 body = re.sub(
                     r"(<body[^>]*>)",
-                    r"\1" + banner,
+                    r"\1" + inject,
                     body,
                     count=1,
                     flags=re.IGNORECASE,
                 )
             else:
-                body = banner + body
+                body = inject + body
             self._html(body)
             return
 
@@ -761,6 +841,10 @@ class Handler(BaseHTTPRequestHandler):
             if not run:
                 self._html("Run not found.", status=404)
                 return
+            mc = run.get("market_compare") or {}
+            if run.get("status") == "ok" and not mc.get("status"):
+                queue_market_compare(run["id"])
+                run = load_run(run["id"]) or run
             self._html(self._render_run_page(run))
             return
 
@@ -788,6 +872,33 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+
+        m = re.fullmatch(r"/api/runs/([^/]+)/market-compare", path)
+        if m:
+            user = self._require_session(api=True)
+            if not user:
+                return
+            run_id = m.group(1)
+            run = load_run(run_id)
+            if not run:
+                self._json({"error": "not found"}, status=404)
+                return
+            try:
+                body = self._read_json()
+            except json.JSONDecodeError:
+                body = {}
+            force = bool(body.get("force") if isinstance(body, dict) else False)
+            queued = queue_market_compare(run_id, force=force or True)
+            self._json(
+                {
+                    "ok": True,
+                    "queued": True,
+                    "run_id": run_id,
+                    "market_compare": (queued or run).get("market_compare"),
+                }
+            )
+            return
+
         if path not in ("/api/analyze", "/api/reports/refresh", "/api/ticker/refresh"):
             self._json({"error": "not found"}, status=404)
             return
