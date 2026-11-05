@@ -37,11 +37,17 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from tradingagents.market_time import market_today_iso
+from tradingagents.market_time import market_today_iso, market_tz
 from tradingagents.market_compare.pipeline import run_market_compare
 from tradingagents.market_compare.render import (
     render_market_compare_section,
     render_report_compare_banner,
+)
+from tradingagents.site_run_limits import (
+    DEFAULT_MAX_ANALYSES_PER_TICKER_DAY,
+    run_day_key,
+    select_coalesce_target,
+    sort_runs_newest_first,
 )
 
 ROOT = Path(os.environ.get("TRADINGAGENTS_ROOT", Path(__file__).resolve().parents[1]))
@@ -196,7 +202,7 @@ def summarize_run(run: dict) -> dict:
     """Compact fields for tables / API lists."""
     run_id = run.get("id")
     report_path = f"/runs/{run_id}/report" if run_id and (run.get("report_html") or run.get("report_md")) else None
-    return {
+    out = {
         "id": run_id,
         "status": run.get("status"),
         "ticker": run.get("ticker"),
@@ -213,6 +219,40 @@ def summarize_run(run: dict) -> dict:
         "run_url": f"/runs/{run_id}" if run_id else None,
         "public_url": f"{PUBLIC_URL}/runs/{run_id}" if run_id else None,
     }
+    if run.get("coalesced"):
+        out["coalesced"] = True
+        out["coalesce_reason"] = run.get("coalesce_reason")
+        out["repeat_requests"] = run.get("repeat_requests")
+    return out
+
+
+def max_analyses_per_ticker_day() -> int:
+    raw = (os.environ.get("TRADINGAGENTS_MAX_ANALYSES_PER_TICKER_DAY") or "").strip()
+    if not raw:
+        return DEFAULT_MAX_ANALYSES_PER_TICKER_DAY
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_ANALYSES_PER_TICKER_DAY
+
+
+def list_full_runs_for_ticker_day(ticker: str, day: str) -> list[dict]:
+    """Full run dicts for ticker on a market calendar day (newest first)."""
+    ticker = ticker.strip().upper()
+    day = (day or "").strip()[:10]
+    tz = market_tz()
+    items: list[dict] = []
+    for path in RUNS_DIR.glob("*.json"):
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if str(row.get("ticker") or "").upper() != ticker:
+            continue
+        if run_day_key(row, market_tz=tz) != day:
+            continue
+        items.append(row)
+    return sort_runs_newest_first(items)
 
 
 def latest_report_for_ticker(ticker: str) -> dict | None:
@@ -384,13 +424,43 @@ def queue_analyze(
     viewer: str | None,
     analysis_date: str | None = None,
     watchlist_id: str | None = None,
+    force: bool = False,
 ) -> dict:
     ticker = ticker.strip().upper()
     account = (account or "").strip() or None
     watchlist_id = (watchlist_id or "").strip() or None
     analysts = (analysts or "market,news,fundamentals").strip()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
     analysis_date = analysis_date or analysis_date_today()
+
+    # ≤2 analyses / ticker / market day; fold repeats into the most recent.
+    if not force:
+        today_runs = list_full_runs_for_ticker_day(ticker, analysis_date)
+        existing, reason = select_coalesce_target(
+            today_runs, max_per_day=max_analyses_per_ticker_day()
+        )
+        if existing is not None:
+            # Re-load to reduce races with the background worker.
+            latest = load_run(str(existing.get("id") or "")) or dict(existing)
+            latest["repeat_requests"] = int(latest.get("repeat_requests") or 0) + 1
+            latest["last_request_at"] = iso_now()
+            if viewer:
+                latest["last_viewer"] = viewer
+            # Book context on a still-queued run is best-effort (worker may
+            # already have captured the original account/watchlist).
+            if str(latest.get("status") or "").lower() == "queued":
+                if account:
+                    latest["account"] = account
+                if watchlist_id:
+                    latest["watchlist_id"] = watchlist_id
+                if analysts:
+                    latest["analysts"] = analysts
+            save_run(latest)
+            out = dict(latest)
+            out["coalesced"] = True
+            out["coalesce_reason"] = reason
+            return out
+
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
     run = {
         "id": run_id,
         "status": "queued",
@@ -405,6 +475,7 @@ def queue_analyze(
         "error": None,
         "rating": None,
         "conclusion": None,
+        "repeat_requests": 0,
     }
     save_run(run)
 
@@ -983,6 +1054,8 @@ class Handler(BaseHTTPRequestHandler):
         date = str(body.get("date") or "").strip() or None
         # Background refresh from quote pages / cadence cron: do not require a human viewer.
         viewer = user.get("email") if not user.get("service") else str(body.get("viewer") or "cadence")
+        # Service token may pass force=true to bypass the daily per-ticker cap.
+        force = bool(body.get("force")) and bool(user.get("service"))
         run = queue_analyze(
             ticker=ticker,
             account=account,
@@ -990,10 +1063,14 @@ class Handler(BaseHTTPRequestHandler):
             viewer=viewer,
             analysis_date=date,
             watchlist_id=watchlist_id,
+            force=force,
         )
+        coalesced = bool(run.get("coalesced"))
         payload = {
             "ok": True,
-            "queued": True,
+            "queued": (not coalesced) and str(run.get("status") or "").lower() == "queued",
+            "coalesced": coalesced,
+            "coalesce_reason": run.get("coalesce_reason"),
             "run": summarize_run(run),
             "redirect": f"/runs/{run['id']}",
             "public_url": f"{PUBLIC_URL}/runs/{run['id']}",

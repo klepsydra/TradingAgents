@@ -248,8 +248,9 @@
         <strong>one symbol to decide on</strong> — e.g. a holding like <code>VOO</code>,
         or a candidate like <code>SPY</code>. <strong>Analyze</strong> stays on this page
         and queues the run into <strong>Recent runs</strong> (even when the ticker has no
-        history yet). Quote-page deep links still auto-start via <code>/start</code>
-        and open the live run page.
+        history yet). At most <strong>two analyses per ticker per day</strong>; further
+        clicks (or an already in-flight run) reuse the most recent. Quote-page deep
+        links still auto-start via <code>/start</code> and open the live run page.
       </p>
       <label for="account">Account</label>
       <select id="account"></select>
@@ -713,15 +714,24 @@
         });
         const run = data.run || {};
         const runId = run.id;
-        // Stay on home: keep ticker filter, show the queued row in Recent runs.
+        // Stay on home: keep ticker filter, show the queued/reused row in Recent runs.
         markActiveHolding(ticker);
         markFreshRun(runId);
         await loadRuns(ticker);
         await loadPastForTicker(ticker);
         scheduleRunsPoll();
         const when = (run.created_at || '').replace('T', ' ').slice(0, 19) || 'just now';
+        let statusLine =
+          `Queued <strong>${esc(ticker)}</strong> · ${pill(run.status || 'queued')} · ${esc(when)}`;
+        if (data.coalesced) {
+          const why = data.coalesce_reason === 'daily_cap'
+            ? 'daily cap (≤2 / ticker) — using most recent'
+            : 'already in flight — combined into most recent';
+          statusLine =
+            `Reused <strong>${esc(ticker)}</strong> · ${pill(run.status || '?')} · ${esc(why)}`;
+        }
         $('runStatus').innerHTML =
-          `Queued <strong>${esc(ticker)}</strong> · ${pill(run.status || 'queued')} · ${esc(when)}` +
+          statusLine +
           (runId ? ` · <a href="/runs/${esc(runId)}">open details</a>` : '') +
           ` — watching Recent runs`;
         const grid = $('runsGrid');
