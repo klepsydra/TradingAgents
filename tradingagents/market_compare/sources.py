@@ -43,9 +43,11 @@ def source_catalog(ticker: str) -> list[dict]:
     def add(name: str, url: str, *, group: str) -> None:
         rows.append({"name": name, "url": url, "group": group, "asset_kind": kind})
 
-    # —— Broker / Cortex ——
+    # —— Broker / Cortex / RH news ——
     add("Robinhood quote / Cortex", f"https://robinhood.com/stocks/{t}/", group="broker")
     add("Robinhood (alt path)", f"https://robinhood.com/us/en/stocks/{t}/", group="broker")
+    # e.g. https://robinhood.com/news/NOW — ticker-scoped news feed
+    add("Robinhood news", f"https://robinhood.com/news/{t}", group="media")
 
     # —— Analyst ratings / written research (priority for coincide/differ) ——
     add(
@@ -140,5 +142,6 @@ ANALYST_FOCUS_NAMES = (
     "Stock Rover",
     "Investopedia",
     "Robinhood Cortex",
+    "Robinhood news",
     "Barchart",
 )
