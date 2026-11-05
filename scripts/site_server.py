@@ -383,9 +383,11 @@ def queue_analyze(
     analysts: str,
     viewer: str | None,
     analysis_date: str | None = None,
+    watchlist_id: str | None = None,
 ) -> dict:
     ticker = ticker.strip().upper()
     account = (account or "").strip() or None
+    watchlist_id = (watchlist_id or "").strip() or None
     analysts = (analysts or "market,news,fundamentals").strip()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
     analysis_date = analysis_date or analysis_date_today()
@@ -394,6 +396,7 @@ def queue_analyze(
         "status": "queued",
         "ticker": ticker,
         "account": account,
+        "watchlist_id": watchlist_id,
         "analysts": analysts,
         "date": analysis_date,
         "created_at": iso_now(),
@@ -424,9 +427,31 @@ def queue_analyze(
             "--no-show",
             "--html",
         ]
-        if account:
-            cmd.extend(["--account", account])
+        portfolio_path = None
         try:
+            if watchlist_id:
+                book = bridge_cli("watchlist", "--id", watchlist_id)
+                # Watchlist is an alternative to Account: feed symbols as the book
+                # via --portfolio (do not also pass --account — CLI lets account win).
+                wl_meta = book.get("watchlist") or {}
+                if not run.get("account") and wl_meta.get("account"):
+                    run["account"] = str(wl_meta.get("account"))
+                run["watchlist_label"] = wl_meta.get("label")
+                portfolio_path = RUNS_DIR / f"{run_id}.portfolio.json"
+                portfolio_path.write_text(
+                    json.dumps(
+                        {
+                            "cash": book.get("cash", 0),
+                            "currency": book.get("currency") or "USD",
+                            "positions": book.get("positions") or [],
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                cmd.extend(["--portfolio", str(portfolio_path)])
+            elif account:
+                cmd.extend(["--account", account])
             proc = subprocess.run(
                 cmd,
                 cwd=str(ROOT),
@@ -445,6 +470,12 @@ def queue_analyze(
         except Exception as exc:  # noqa: BLE001
             run["status"] = "failed"
             run["error"] = str(exc)
+        finally:
+            if portfolio_path is not None:
+                try:
+                    portfolio_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         run["finished_at"] = iso_now()
         enrich_run_artifacts(run)
         save_run(run)
@@ -724,12 +755,37 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_session(api=True):
                 return
             account = (qs.get("account") or [""])[0]
+            watchlist_id = (qs.get("watchlist") or qs.get("watchlist_id") or [""])[0].strip()
+            if watchlist_id:
+                try:
+                    book = bridge_cli("watchlist", "--id", watchlist_id)
+                    self._json(
+                        {
+                            "watchlist_id": watchlist_id,
+                            "watchlist": book.get("watchlist"),
+                            "portfolio": book,
+                            "source": "watchlist",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._json({"error": str(exc)}, status=500)
+                return
             if not account:
-                self._json({"error": "account required"}, status=422)
+                self._json({"error": "account or watchlist required"}, status=422)
                 return
             try:
                 book = bridge_cli("portfolio", "--account", account, "--strict")
                 self._json({"account": account, "portfolio": book})
+            except Exception as exc:  # noqa: BLE001
+                self._json({"error": str(exc)}, status=500)
+            return
+
+        if path == "/api/watchlists":
+            if not self._require_session(api=True):
+                return
+            try:
+                rows = bridge_cli("watchlists")
+                self._json({"watchlists": rows})
             except Exception as exc:  # noqa: BLE001
                 self._json({"error": str(exc)}, status=500)
             return
@@ -913,10 +969,16 @@ class Handler(BaseHTTPRequestHandler):
 
         qs = urllib.parse.parse_qs(parsed.query)
         ticker = str(body.get("ticker") or body.get("symbol") or (qs.get("ticker") or [""])[0]).strip().upper()
-        account = str(body.get("account") or "").strip() or self._sticky_account()
+        watchlist_id = str(body.get("watchlist_id") or body.get("watchlist") or "").strip() or None
+        account = str(body.get("account") or "").strip() or (
+            None if watchlist_id else self._sticky_account()
+        )
         analysts = str(body.get("analysts") or "market,news,fundamentals").strip()
         if not ticker:
             self._json({"error": "ticker required"}, status=422)
+            return
+        if not account and not watchlist_id:
+            self._json({"error": "account or watchlist required"}, status=422)
             return
         date = str(body.get("date") or "").strip() or None
         # Background refresh from quote pages / cadence cron: do not require a human viewer.
@@ -927,6 +989,7 @@ class Handler(BaseHTTPRequestHandler):
             analysts=analysts,
             viewer=viewer,
             analysis_date=date,
+            watchlist_id=watchlist_id,
         )
         payload = {
             "ok": True,
