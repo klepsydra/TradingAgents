@@ -193,6 +193,11 @@
     }
     .tabulator-row.tabulator-row-even { background: #10161e !important; }
     .tabulator-row:hover { background: #16202b !important; }
+    .tabulator-row.row-fresh {
+      background: color-mix(in srgb, var(--accent) 22%, #0c1117) !important;
+      box-shadow: inset 3px 0 0 var(--accent);
+      transition: background 0.6s ease;
+    }
     .tabulator-row .tabulator-cell {
       border-right: 1px solid transparent !important;
       padding: 0.35rem 0.5rem;
@@ -241,8 +246,10 @@
         Pick a brokerage/paper <strong>Account</strong> or a <strong>Watchlist</strong>
         (alternative — loads that list into the portfolio snapshot), then enter
         <strong>one symbol to decide on</strong> — e.g. a holding like <code>VOO</code>,
-        or a candidate like <code>SPY</code>. Quote-page deep links auto-start research
-        on <code>/start</code> and open the live run page.
+        or a candidate like <code>SPY</code>. <strong>Analyze</strong> stays on this page
+        and queues the run into <strong>Recent runs</strong> (even when the ticker has no
+        history yet). Quote-page deep links still auto-start via <code>/start</code>
+        and open the live run page.
       </p>
       <label for="account">Account</label>
       <select id="account"></select>
@@ -287,6 +294,9 @@
     let runsTable = null;
     let runsFilterTicker = '';
     let watchlistsCache = [];
+    let runsPollTimer = null;
+    let freshRunId = null;
+    let freshRunTimer = null;
 
     async function api(path, opts) {
       const res = await fetch(path, opts);
@@ -492,6 +502,11 @@
         groupToggleElement: 'header',
         initialSort: [{ column: 'when', dir: 'desc' }],
         placeholder: 'No runs yet',
+        rowFormatter: (row) => {
+          const el = row.getElement();
+          if (!el) return;
+          el.classList.toggle('row-fresh', !!freshRunId && row.getData().id === freshRunId);
+        },
         columns: [
           {
             title: 'When',
@@ -557,6 +572,66 @@
       return runsTable;
     }
 
+    function mapRunRow(r) {
+      return {
+        id: r.id,
+        when: (r.created_at || '').replace('T', ' ').slice(0, 19),
+        ticker: r.ticker || '',
+        rating: r.rating || '—',
+        account: r.account || '—',
+        status: r.status || ''
+      };
+    }
+
+    function markFreshRun(runId) {
+      freshRunId = runId || null;
+      clearTimeout(freshRunTimer);
+      if (!freshRunId || !runsTable) return;
+      const paint = () => {
+        runsTable.getRows().forEach((row) => {
+          const el = row.getElement();
+          if (!el) return;
+          el.classList.toggle('row-fresh', row.getData().id === freshRunId);
+        });
+      };
+      paint();
+      // Re-apply after Tabulator redraws, then fade highlight.
+      requestAnimationFrame(paint);
+      freshRunTimer = setTimeout(() => {
+        freshRunId = null;
+        if (runsTable) {
+          runsTable.getRows().forEach((row) => {
+            const el = row.getElement();
+            if (el) el.classList.remove('row-fresh');
+          });
+        }
+      }, 12000);
+    }
+
+    function stopRunsPoll() {
+      clearTimeout(runsPollTimer);
+      runsPollTimer = null;
+    }
+
+    function scheduleRunsPoll() {
+      stopRunsPoll();
+      runsPollTimer = setTimeout(async () => {
+        try {
+          await loadRuns(runsFilterTicker);
+          const ticker = currentTicker();
+          if (ticker) await loadPastForTicker(ticker);
+          const busy = (runsTable ? runsTable.getData() : []).some((r) => {
+            const s = (r.status || '').toLowerCase();
+            return s === 'queued' || s === 'running';
+          });
+          if (busy) scheduleRunsPoll();
+          else stopRunsPoll();
+        } catch (_e) {
+          scheduleRunsPoll();
+        }
+      }, 2500);
+    }
+
     async function loadRuns(tickerFilter) {
       const ticker = (tickerFilter == null ? runsFilterTicker : tickerFilter || '').trim().toUpperCase();
       runsFilterTicker = ticker;
@@ -565,16 +640,11 @@
         ? '/api/runs?ticker=' + encodeURIComponent(ticker)
         : '/api/runs';
       const data = await api(path);
-      const rows = (data.runs || []).map(r => ({
-        id: r.id,
-        when: (r.created_at || '').replace('T', ' ').slice(0, 19),
-        ticker: r.ticker || '',
-        rating: r.rating || '—',
-        account: r.account || '—',
-        status: r.status || ''
-      }));
+      const rows = (data.runs || []).map(mapRunRow);
       const table = ensureRunsTable();
       await table.setData(rows);
+      if (freshRunId) markFreshRun(freshRunId);
+      return rows;
     }
 
     function onTickerEdited() {
@@ -628,7 +698,7 @@
         return;
       }
       $('runBtn').disabled = true;
-      $('runStatus').textContent = 'Launching research…';
+      $('runStatus').textContent = 'Queuing research…';
       try {
         const payload = {
           ticker,
@@ -641,13 +711,26 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (data.redirect) {
-          location.href = data.redirect;
-          return;
+        const run = data.run || {};
+        const runId = run.id;
+        // Stay on home: keep ticker filter, show the queued row in Recent runs.
+        markActiveHolding(ticker);
+        markFreshRun(runId);
+        await loadRuns(ticker);
+        await loadPastForTicker(ticker);
+        scheduleRunsPoll();
+        const when = (run.created_at || '').replace('T', ' ').slice(0, 19) || 'just now';
+        $('runStatus').innerHTML =
+          `Queued <strong>${esc(ticker)}</strong> · ${pill(run.status || 'queued')} · ${esc(when)}` +
+          (runId ? ` · <a href="/runs/${esc(runId)}">open details</a>` : '') +
+          ` — watching Recent runs`;
+        const grid = $('runsGrid');
+        if (grid && typeof grid.scrollIntoView === 'function') {
+          grid.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
-        location.href = '/runs/' + data.run.id;
       } catch (e) {
         $('runStatus').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+      } finally {
         $('runBtn').disabled = false;
       }
     };
@@ -677,8 +760,14 @@
       const q = applyQueryParams();
       const ticker = q.ticker || currentTicker();
       markActiveHolding(ticker);
-      await loadRuns(ticker);
+      const rows = await loadRuns(ticker);
       await loadPastForTicker(ticker);
+      if ((rows || []).some((r) => {
+        const s = (r.status || '').toLowerCase();
+        return s === 'queued' || s === 'running';
+      })) {
+        scheduleRunsPoll();
+      }
     })().catch(e => {
       if (e.message !== 'login') $('viewer').textContent = e.message;
     });
