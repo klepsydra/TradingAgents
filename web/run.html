@@ -83,6 +83,13 @@
     details.past[open] > summary::before { content: "▾ "; }
     .kv { display: grid; grid-template-columns: 7rem 1fr; gap: 0.35rem 0.75rem; font-size: 0.92rem; }
     .kv dt { color: var(--muted); }
+    .market-compare ul { margin: 0.25rem 0 0; padding-left: 1.1rem; }
+    .market-compare button {
+      width: auto; margin: 0; padding: 0.35rem 0.7rem; font: inherit;
+      background: #1c2733; border: 1px solid var(--line); color: var(--text);
+      border-radius: 8px; cursor: pointer;
+    }
+    .err { color: var(--bad); }
   </style>
 </head>
 <body>
@@ -107,6 +114,8 @@
       <summary id="pastSummary">Past reports on this ticker</summary>
       <div id="pastTable" style="margin-top:0.5rem"></div>
     </details>
+
+    <!--__MARKET_COMPARE__-->
 
     <div class="grid">
       <section>
@@ -202,10 +211,48 @@
     render(BOOT.run);
     renderPast(BOOT.past || []);
 
+    async function refreshMarketCompare(force) {
+      const run = BOOT.run;
+      if (!run || !run.id) return;
+      try {
+        if (force) {
+          await fetch('/api/runs/' + encodeURIComponent(run.id) + '/market-compare', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true })
+          });
+        }
+        const res = await fetch('/api/runs/' + encodeURIComponent(run.id));
+        if (!res.ok) return;
+        const data = await res.json();
+        BOOT.run = data;
+        render(data);
+        const status = (data.market_compare && data.market_compare.status) || '';
+        if (status === 'running') {
+          setTimeout(() => refreshMarketCompare(false), 5000);
+        } else if (status === 'ok' || status === 'failed') {
+          // Server-rendered HTML is stale once the background job finishes — reload once.
+          if (force || status !== (BOOT._mcSeen || '')) location.reload();
+        }
+        BOOT._mcSeen = status;
+      } catch (_) {}
+    }
+
+    document.addEventListener('click', (e) => {
+      if (e.target && e.target.id === 'mcRefreshBtn') {
+        e.preventDefault();
+        refreshMarketCompare(true);
+      }
+    });
+
     async function poll() {
       const run = BOOT.run;
       if (!run || !run.id) return;
-      if (run.status === 'ok' || run.status === 'failed') return;
+      const mcStatus = (run.market_compare && run.market_compare.status) || '';
+      if ((run.status === 'ok' || run.status === 'failed') && mcStatus !== 'running') {
+        if (run.status === 'ok' && !mcStatus) refreshMarketCompare(true);
+        return;
+      }
       try {
         const res = await fetch('/api/runs/' + encodeURIComponent(run.id));
         if (res.status === 401) {
@@ -214,12 +261,25 @@
           return;
         }
         const data = await res.json();
+        const prevMc = (BOOT.run.market_compare && BOOT.run.market_compare.status) || '';
         BOOT.run = data;
         render(data);
+        const nextMc = (data.market_compare && data.market_compare.status) || '';
         if (data.status === 'ok' || data.status === 'failed') {
           const pastRes = await fetch('/api/runs?ticker=' + encodeURIComponent(data.ticker || ''));
           const pastData = await pastRes.json();
           renderPast((pastData.runs || []).filter(r => r.id !== data.id));
+          if (nextMc === 'running') {
+            setTimeout(poll, 4000);
+            return;
+          }
+          if (prevMc === 'running' && (nextMc === 'ok' || nextMc === 'failed')) {
+            location.reload();
+            return;
+          }
+          if (data.status === 'ok' && !nextMc) {
+            refreshMarketCompare(true);
+          }
           return;
         }
       } catch (_) {}
