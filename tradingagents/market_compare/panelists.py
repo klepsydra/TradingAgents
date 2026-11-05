@@ -45,6 +45,10 @@ def _compare_prompt(*, ticker: str, ta_decision: str, market_blob: str) -> str:
     return f"""You are an independent market-research analyst. Compare TradingAgents' decision on {ticker}
 against the prevailing street / media analyst picture gathered below.
 
+Priority: **analyst ratings and written explanations** that react to recent company events and
+the surrounding industry / sector / macro / business environment — not just price quotes.
+Paywalled or skipped sources may be absent; do not invent their stance.
+
 ## TradingAgents decision (source of truth for "our" call)
 {ta_decision[:12000]}
 
@@ -64,7 +68,7 @@ Return STRICT JSON:
     {{"point": "...", "why": "..."}}
   ],
   "per_source": [
-    {{"source": "TipRanks|Seeking Alpha|Morningstar|Barchart|Robinhood Cortex|...", "their_stance": "...", "vs_tradingagents": "coincide|differ|unclear", "why": "..."}}
+    {{"source": "TipRanks|Seeking Alpha|Morningstar|Finviz|Yahoo|TradingView|TIKR|Koyfin|Quartr|Barchart|Robinhood Cortex|...", "their_stance": "...", "vs_tradingagents": "coincide|differ|unclear", "why": "rating + recent-event explanation"}}
   ],
   "executive_take": "4-8 sentences a portfolio manager would read"
 }}
@@ -215,16 +219,23 @@ def run_panel(*, ticker: str, ta_decision: str, market_gather: dict) -> list[dic
     parsed = research.get("parsed") or {}
     snippets = market_gather.get("page_snippets") or []
     snippet_txt = "\n".join(
-        f"- {s.get('name')}: {(s.get('snippet') or '')[:400]}"
+        f"- {s.get('name')}{' [cache]' if s.get('from_cache') else ''}: {(s.get('snippet') or '')[:400]}"
         for s in snippets
         if s.get("ok")
+    )
+    skipped_txt = ", ".join(
+        f"{s.get('name')}({s.get('skip_reason') or 'skip'})"
+        for s in snippets
+        if s.get("skipped")
     )
     market_blob = json.dumps(
         {
             "perplexity": parsed or research.get("raw"),
             "citations": research.get("citations"),
             "page_snippets": snippet_txt,
-            "source_urls": [s.get("url") for s in (market_gather.get("sources") or [])[:20]],
+            "skipped_or_paywalled": skipped_txt,
+            "gather_stats": market_gather.get("gather_stats") or {},
+            "source_urls": [s.get("url") for s in (market_gather.get("sources") or [])[:28]],
         },
         indent=2,
     )

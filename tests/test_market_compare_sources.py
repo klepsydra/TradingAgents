@@ -1,20 +1,86 @@
-from tradingagents.market_compare.sources import asset_kind, source_catalog
+from tradingagents.market_compare.sources import (
+    ANALYST_FOCUS_NAMES,
+    asset_kind,
+    source_catalog,
+)
 
 
 def test_voo_is_etf_and_has_core_sources():
     assert asset_kind("VOO") == "etf"
-    urls = {row["url"] for row in source_catalog("VOO")}
+    rows = source_catalog("VOO")
+    urls = {row["url"] for row in rows}
+    names = {row["name"] for row in rows}
     assert any("barchart.com/etfs-funds/quotes/VOO/opinion" in u for u in urls)
     assert any("tipranks.com/etf/voo" in u for u in urls)
     assert any("robinhood.com/stocks/VOO" in u for u in urls)
     assert any("seekingalpha.com/symbol/VOO/analysis" in u for u in urls)
     assert any("marketbeat.com/stocks/NYSEARCA/VOO" in u for u in urls)
+    # ROBIN-1894 research-tool list
+    assert "Finviz ETF" in names
+    assert "Yahoo Finance" in names
+    assert "TradingView" in names
+    assert "Koyfin" in names
+    assert "TIKR" in names
+    assert "Business Quant" in names
+    assert "Stock Analysis ETF" in names
+    assert "Quartr" in names
+    assert "stocksbrew" in names
+    assert "Simply Wall St" in names
+    assert "Quiver Quantitative" in names
+    assert "Google Finance" in names
+    assert "Ticker Nerd" in names
+    assert "Stock Rover" in names
 
 
 def test_aapl_is_stock_shape():
     assert asset_kind("AAPL") == "stock"
     names = {row["name"] for row in source_catalog("AAPL")}
     assert "TipRanks" in names
+    assert "Finviz" in names
+    assert "Yahoo Finance analysis" in names
+    assert "TradingView" in names
+    assert "Koyfin" in names
+    assert "TIKR" in names
+    assert "Business Quant" in names
+    assert "Quartr" in names
+    assert "stocksbrew" in names
     urls = " ".join(row["url"] for row in source_catalog("AAPL"))
     assert "etfs-funds" not in urls
     assert "barchart.com/stocks/quotes/AAPL/opinion" in urls
+    assert "finviz.com/quote.ashx?t=AAPL" in urls
+    assert "finance.yahoo.com/quote/AAPL/analysis" in urls
+    assert "tradingview.com/symbols/AAPL" in urls
+    assert "app.koyfin.com/expected/AAPL" in urls
+    assert "app.tikr.com/stock/aapl" in urls
+    assert "businessquant.com/company/aapl" in urls
+    assert "quartr.com/companies/aapl" in urls
+    assert "stocksbrew.online/stocks/aapl" in urls
+
+
+def test_analyst_focus_covers_robin1894_lists():
+    focus = " ".join(ANALYST_FOCUS_NAMES).lower()
+    for name in (
+        "finviz",
+        "koyfin",
+        "stock analysis",
+        "tikr",
+        "tradingview",
+        "yahoo finance",
+        "business quant",
+        "quartr",
+        "seeking alpha",
+        "stocksbrew",
+        "ticker nerd",
+        "stock rover",
+        "simply wall st",
+        "quiver",
+        "tipranks",
+        "motley fool",
+        "investopedia",
+    ):
+        assert name in focus, name
+
+
+def test_empty_ticker():
+    assert source_catalog("") == []
+    assert source_catalog("  ") == []

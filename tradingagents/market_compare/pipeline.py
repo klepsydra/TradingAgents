@@ -112,6 +112,7 @@ def run_market_compare(run: dict) -> dict:
             "research_model": (gather.get("research") or {}).get("model"),
             "citations": (gather.get("research") or {}).get("citations") or [],
             "parsed": (gather.get("research") or {}).get("parsed"),
+            "gather_stats": gather.get("gather_stats") or {},
             "page_hits": [
                 {
                     "name": s.get("name"),
@@ -120,6 +121,9 @@ def run_market_compare(run: dict) -> dict:
                     "http_status": s.get("http_status"),
                     "keywords": s.get("keywords"),
                     "snippet": (s.get("snippet") or "")[:600],
+                    "from_cache": bool(s.get("from_cache")),
+                    "skipped": bool(s.get("skipped")),
+                    "skip_reason": s.get("skip_reason"),
                 }
                 for s in (gather.get("page_snippets") or [])
             ],
