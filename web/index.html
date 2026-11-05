@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>TradingAgents</title>
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_midnight.min.css" />
   <style>
     :root {
       --bg: #0f1419;
@@ -102,6 +103,127 @@
     details.past > summary::-webkit-details-marker { display: none; }
     details.past > summary::before { content: "▸ "; color: var(--accent); }
     details.past[open] > summary::before { content: "▾ "; }
+
+    #portfolio {
+      margin: 0;
+      max-height: 320px;
+      overflow: auto;
+      background: #0c1117;
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      font-size: 0.8rem;
+      color: #c5d0dc;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    #portfolio .port-meta { color: var(--muted); margin: 0.1rem 0; }
+    #portfolio .port-row {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin: 0.12rem 0;
+      padding: 0.28rem 0.4rem;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      white-space: pre;
+    }
+    #portfolio .port-row:hover,
+    #portfolio .port-row:focus-visible {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+      background: color-mix(in srgb, var(--accent) 12%, #0c1117);
+      outline: none;
+    }
+    #portfolio .port-row.active {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 18%, #0c1117);
+      color: var(--text);
+    }
+    .runs-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      align-items: center;
+      justify-content: space-between;
+      margin: 0 0 0.55rem;
+    }
+    .runs-toolbar .meta { margin: 0; }
+    .runs-toolbar button {
+      width: auto;
+      margin: 0;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.8rem;
+      background: #1c2733;
+      border: 1px solid var(--line);
+    }
+    #runsGrid {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 0.85rem;
+      min-height: 220px;
+    }
+    .tabulator {
+      background: #0c1117 !important;
+      border: none !important;
+      font-family: inherit;
+      color: var(--text);
+    }
+    .tabulator .tabulator-header {
+      background: #121820 !important;
+      border-bottom: 1px solid var(--line) !important;
+      color: var(--muted);
+    }
+    .tabulator .tabulator-header .tabulator-col {
+      background: #121820 !important;
+      border-right: 1px solid var(--line) !important;
+    }
+    .tabulator .tabulator-header .tabulator-col-content { padding: 0.4rem 0.5rem; }
+    .tabulator .tabulator-header .tabulator-col.tabulator-sortable .tabulator-col-title {
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .tabulator-row {
+      background: #0c1117 !important;
+      border-bottom: 1px solid var(--line) !important;
+      min-height: 2rem;
+      cursor: pointer;
+    }
+    .tabulator-row.tabulator-row-even { background: #10161e !important; }
+    .tabulator-row:hover { background: #16202b !important; }
+    .tabulator-row .tabulator-cell {
+      border-right: 1px solid transparent !important;
+      padding: 0.35rem 0.5rem;
+    }
+    .tabulator .tabulator-footer {
+      background: #121820 !important;
+      border-top: 1px solid var(--line) !important;
+      color: var(--muted);
+    }
+    .tabulator .tabulator-footer .tabulator-page {
+      background: #1c2733;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    .tabulator .tabulator-footer .tabulator-page.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #041018;
+    }
+    .tabulator .tabulator-header-filter input {
+      background: #0c1117;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 0.2rem 0.35rem;
+    }
+    .tabulator .tabulator-group {
+      background: #15202b !important;
+      border-bottom: 1px solid var(--line) !important;
+      color: var(--text);
+    }
   </style>
 </head>
 <body>
@@ -124,13 +246,14 @@
       <label for="account">Account</label>
       <select id="account"></select>
       <label for="ticker">Ticker (symbol under review)</label>
-      <input id="ticker" value="AAPL" placeholder="e.g. SPY, VOO, AAPL, NVDA" />
+      <input id="ticker" value="" placeholder="e.g. SPY, VOO, AAPL, NVDA" autocomplete="off" />
       <label for="analysts">Analysts</label>
       <input id="analysts" value="market,news,fundamentals" />
       <button id="runBtn">Analyze</button>
       <p class="meta" id="runStatus"></p>
       <h2 style="margin-top:1.2rem">Portfolio snapshot (context for the agents)</h2>
-      <pre id="portfolio">Select an account…</pre>
+      <p class="meta" style="margin:0 0 0.45rem">Click a holding to fill the ticker and filter Recent runs.</p>
+      <div id="portfolio">Select an account…</div>
       <details class="past" id="pastWrap" hidden>
         <summary id="pastSummary">Past reports on this ticker</summary>
         <div id="pastTable" style="margin-top:0.55rem"></div>
@@ -138,15 +261,22 @@
     </section>
     <section>
       <h2>Recent runs</h2>
-      <div id="runs"></div>
+      <div class="runs-toolbar">
+        <p class="meta" id="runsFilterHint">Showing all recent runs</p>
+        <button type="button" id="clearRunsFilter" hidden>Clear ticker filter</button>
+      </div>
+      <div id="runsGrid"></div>
       <h2 style="margin-top:1.2rem">Log</h2>
       <pre id="log">—</pre>
       <p class="meta"><a href="/logout">Sign out</a></p>
     </section>
   </main>
+  <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const ACCOUNT_KEY = 'tradingagents_last_account';
+    let runsTable = null;
+    let runsFilterTicker = '';
 
     async function api(path, opts) {
       const res = await fetch(path, opts);
@@ -162,11 +292,15 @@
     function pill(status) {
       const s = (status || '').toLowerCase();
       const cls = s === 'ok' ? 'paper' : (s === 'failed' ? 'live' : 'warn');
-      return `<span class="pill ${cls}">${status || '?'}</span>`;
+      return `<span class="pill ${cls}">${esc(status || '?')}</span>`;
     }
 
     function esc(s) {
       return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function currentTicker() {
+      return ($('ticker').value || '').trim().toUpperCase();
     }
 
     function preferredAccount(accounts, sticky) {
@@ -193,6 +327,22 @@
       if (accounts.length) loadPortfolio();
     }
 
+    function markActiveHolding(ticker) {
+      const root = $('portfolio');
+      root.querySelectorAll('.port-row').forEach(btn => {
+        btn.classList.toggle('active', (btn.dataset.ticker || '') === ticker);
+      });
+    }
+
+    function selectHolding(ticker) {
+      const sym = (ticker || '').trim().toUpperCase();
+      if (!sym) return;
+      $('ticker').value = sym;
+      markActiveHolding(sym);
+      loadPastForTicker(sym);
+      loadRuns(sym);
+    }
+
     async function loadPortfolio() {
       const account = $('account').value;
       if (!account) return;
@@ -201,15 +351,25 @@
       try {
         const data = await api('/api/portfolio?account=' + encodeURIComponent(account));
         const p = data.portfolio;
-        const lines = [
-          `cash: ${p.cash} ${p.currency || ''}`,
-          `positions: ${p.positions.length}`,
-          ...p.positions.slice(0, 40).map(x =>
-            `${x.ticker.padEnd(10)} qty=${x.quantity} avg=${x.average_price ?? '—'}`
-          )
+        const positions = p.positions || [];
+        const active = currentTicker();
+        const bits = [
+          `<div class="port-meta">cash: ${esc(p.cash)} ${esc(p.currency || '')}</div>`,
+          `<div class="port-meta">positions: ${positions.length}</div>`,
+          ...positions.slice(0, 40).map(x => {
+            const sym = String(x.ticker || '').toUpperCase();
+            const label = `${sym.padEnd(10)} qty=${x.quantity} avg=${x.average_price ?? '—'}`;
+            const cls = sym && sym === active ? 'port-row active' : 'port-row';
+            return `<button type="button" class="${cls}" data-ticker="${esc(sym)}">${esc(label)}</button>`;
+          })
         ];
-        if (p.positions.length > 40) lines.push(`… +${p.positions.length - 40} more`);
-        $('portfolio').textContent = lines.join('\n');
+        if (positions.length > 40) {
+          bits.push(`<div class="port-meta">… +${positions.length - 40} more</div>`);
+        }
+        $('portfolio').innerHTML = bits.join('');
+        $('portfolio').querySelectorAll('.port-row').forEach(btn => {
+          btn.addEventListener('click', () => selectHolding(btn.dataset.ticker));
+        });
       } catch (e) {
         $('portfolio').innerHTML = `<span class="err">${esc(e.message)}</span>`;
       }
@@ -247,22 +407,147 @@
       renderPast(ticker, data.runs || []);
     }
 
-    async function loadRuns() {
-      const data = await api('/api/runs');
-      const rows = (data.runs || []).map(r => `
-        <tr data-id="${esc(r.id)}" style="cursor:pointer">
-          <td><a href="/runs/${esc(r.id)}">${esc((r.created_at || '').replace('T',' ').slice(0,19))}</a></td>
-          <td>${esc(r.ticker || '')}</td>
-          <td>${esc(r.rating || '—')}</td>
-          <td>${esc(r.account || '—')}</td>
-          <td>${pill(r.status)}</td>
-        </tr>`).join('');
-      $('runs').innerHTML = `<table><thead><tr><th>When</th><th>Ticker</th><th>Rating</th><th>Account</th><th>Status</th></tr></thead><tbody>${rows || '<tr><td colspan=5>No runs yet</td></tr>'}</tbody></table>`;
+    function updateRunsFilterHint(ticker) {
+      const hint = $('runsFilterHint');
+      const clearBtn = $('clearRunsFilter');
+      if (ticker) {
+        hint.textContent = `Filtered to ${ticker}`;
+        clearBtn.hidden = false;
+      } else {
+        hint.textContent = 'Showing all recent runs';
+        clearBtn.hidden = true;
+      }
+    }
+
+    function ensureRunsTable() {
+      if (runsTable) return runsTable;
+      runsTable = new Tabulator('#runsGrid', {
+        data: [],
+        layout: 'fitColumns',
+        responsiveLayout: false,
+        pagination: 'local',
+        paginationSize: 10,
+        paginationSizeSelector: [5, 10, 25, 50],
+        movableColumns: true,
+        resizableColumns: true,
+        groupBy: false,
+        groupToggleElement: 'header',
+        initialSort: [{ column: 'when', dir: 'desc' }],
+        placeholder: 'No runs yet',
+        columns: [
+          {
+            title: 'When',
+            field: 'when',
+            sorter: 'string',
+            headerFilter: 'input',
+            headerFilterPlaceholder: 'Filter…',
+            widthGrow: 1.4,
+            formatter: (cell) => {
+              const row = cell.getRow().getData();
+              return `<a href="/runs/${esc(row.id)}">${esc(cell.getValue() || '')}</a>`;
+            }
+          },
+          {
+            title: 'Ticker',
+            field: 'ticker',
+            sorter: 'string',
+            headerFilter: 'input',
+            headerFilterPlaceholder: 'Filter…',
+            widthGrow: 0.7
+          },
+          {
+            title: 'Rating',
+            field: 'rating',
+            sorter: 'string',
+            headerFilter: 'input',
+            headerFilterPlaceholder: 'Filter…',
+            widthGrow: 0.8
+          },
+          {
+            title: 'Account',
+            field: 'account',
+            sorter: 'string',
+            headerFilter: 'input',
+            headerFilterPlaceholder: 'Filter…',
+            widthGrow: 1.2
+          },
+          {
+            title: 'Status',
+            field: 'status',
+            sorter: 'string',
+            headerFilter: 'input',
+            headerFilterPlaceholder: 'Filter…',
+            widthGrow: 0.8,
+            formatter: (cell) => pill(cell.getValue())
+          }
+        ]
+      });
+
+      runsTable.on('rowClick', (_e, row) => {
+        const id = row.getData().id;
+        if (id) location.href = '/runs/' + id;
+      });
+
+      // Group-by Ticker via header context (Tabulator built-in groupBy toggle UI is limited;
+      // expose a simple double-click on Ticker header to group/ungroup).
+      runsTable.on('headerDblClick', (_e, column) => {
+        if (column.getField() !== 'ticker') return;
+        const current = runsTable.options.groupBy;
+        runsTable.setGroupBy(current === 'ticker' ? false : 'ticker');
+      });
+
+      return runsTable;
+    }
+
+    async function loadRuns(tickerFilter) {
+      const ticker = (tickerFilter == null ? runsFilterTicker : tickerFilter || '').trim().toUpperCase();
+      runsFilterTicker = ticker;
+      updateRunsFilterHint(ticker);
+      const path = ticker
+        ? '/api/runs?ticker=' + encodeURIComponent(ticker)
+        : '/api/runs';
+      const data = await api(path);
+      const rows = (data.runs || []).map(r => ({
+        id: r.id,
+        when: (r.created_at || '').replace('T', ' ').slice(0, 19),
+        ticker: r.ticker || '',
+        rating: r.rating || '—',
+        account: r.account || '—',
+        status: r.status || ''
+      }));
+      const table = ensureRunsTable();
+      await table.setData(rows);
+    }
+
+    function onTickerEdited() {
+      const ticker = currentTicker();
+      markActiveHolding(ticker);
+      loadPastForTicker(ticker);
+      loadRuns(ticker);
     }
 
     $('account').onchange = loadPortfolio;
-    $('ticker').addEventListener('change', () => loadPastForTicker(($('ticker').value || '').trim().toUpperCase()));
+    $('ticker').addEventListener('change', onTickerEdited);
+    $('ticker').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        onTickerEdited();
+      }
+    });
+    $('clearRunsFilter').onclick = () => {
+      $('ticker').value = '';
+      markActiveHolding('');
+      renderPast('', []);
+      loadRuns('');
+    };
+
     $('runBtn').onclick = async () => {
+      const ticker = currentTicker();
+      if (!ticker) {
+        $('runStatus').innerHTML = '<span class="err">Enter a ticker first (or click a portfolio holding).</span>';
+        $('ticker').focus();
+        return;
+      }
       $('runBtn').disabled = true;
       $('runStatus').textContent = 'Launching research…';
       try {
@@ -270,7 +555,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            ticker: $('ticker').value,
+            ticker,
             account: $('account').value,
             analysts: $('analysts').value
           })
@@ -289,7 +574,9 @@
     function applyQueryParams() {
       const qs = new URLSearchParams(location.search);
       const ticker = (qs.get('ticker') || qs.get('symbol') || '').trim().toUpperCase();
+      // Default stays blank unless a deep-link specifies ticker/symbol.
       if (ticker) $('ticker').value = ticker;
+      else $('ticker').value = '';
       return { ticker };
     }
 
@@ -298,8 +585,10 @@
       $('viewer').textContent = (data.viewer && data.viewer.email) || '';
       renderAccounts(data.accounts || [], data.sticky_account || '');
       const q = applyQueryParams();
-      await loadRuns();
-      await loadPastForTicker(q.ticker || ($('ticker').value || '').trim().toUpperCase());
+      const ticker = q.ticker || currentTicker();
+      markActiveHolding(ticker);
+      await loadRuns(ticker);
+      await loadPastForTicker(ticker);
     })().catch(e => {
       if (e.message !== 'login') $('viewer').textContent = e.message;
     });
