@@ -405,6 +405,12 @@ def load_site_env() -> dict[str, str]:
                 env[k] = v
     env["AGENTROBIN_ROOT"] = str(AGENTROBIN_ROOT)
     env["TRADINGAGENTS_ROOT"] = str(ROOT)
+    # Belt-and-suspenders so `python -m cli.main` works even if the editable
+    # install is missing after a mise/python drift (see ROBIN-1907 notes).
+    extra = str(ROOT)
+    existing = env.get("PYTHONPATH") or ""
+    if extra not in existing.split(os.pathsep):
+        env["PYTHONPATH"] = extra + ((os.pathsep + existing) if existing else "")
     for key, value in (
         ("TRADINGAGENTS_OUTPUT_LANGUAGE", "English"),
         ("TRADINGAGENTS_MAX_DEBATE_ROUNDS", "1"),
@@ -418,6 +424,23 @@ def load_site_env() -> dict[str, str]:
         if _env_blank(env, key):
             env[key] = value
     return env
+
+
+def analyze_cli_argv() -> list[str]:
+    """Prefer ``.venv/bin/python -m cli.main`` over the console script.
+
+    The console script fails with ``ModuleNotFoundError: cli`` when the venv
+    interpreter drifts (e.g. mise ``python/latest`` moved 3.14 → 3.15 while
+    site-packages stayed on 3.14). Invoking via the venv python + PYTHONPATH
+    is more resilient.
+    """
+    venv_python = ROOT / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        return [str(venv_python), "-m", "cli.main"]
+    venv_ta = ROOT / ".venv" / "bin" / "tradingagents"
+    if venv_ta.is_file():
+        return [str(venv_ta)]
+    return ["tradingagents"]
 
 
 def queue_analyze(
@@ -488,9 +511,7 @@ def queue_analyze(
         run["started_at"] = iso_now()
         save_run(run)
         cmd = [
-            str(ROOT / ".venv" / "bin" / "tradingagents")
-            if (ROOT / ".venv" / "bin" / "tradingagents").is_file()
-            else "tradingagents",
+            *analyze_cli_argv(),
             "--ticker",
             ticker,
             "--date",
