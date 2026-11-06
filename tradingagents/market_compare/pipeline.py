@@ -7,7 +7,8 @@ from typing import Any
 
 from .gather import gather_market_views
 from .panelists import run_panel
-from .sources import asset_kind, source_catalog
+from .source_registry import effective_source_catalog, record_compare_usage
+from .sources import asset_kind
 
 
 def iso_now() -> str:
@@ -83,7 +84,7 @@ def run_market_compare(run: dict) -> dict:
         "started_at": iso_now(),
         "ticker": ticker,
         "asset_kind": asset_kind(ticker),
-        "source_urls": source_catalog(ticker),
+        "source_urls": effective_source_catalog(ticker),
     }
     run["market_compare"] = mc
 
@@ -154,4 +155,9 @@ def run_market_compare(run: dict) -> dict:
 
     mc["finished_at"] = iso_now()
     run["market_compare"] = mc
+    try:
+        if mc.get("status") in ("ok", "failed"):
+            record_compare_usage(run)
+    except Exception:  # noqa: BLE001 — usage tracking must not break compares
+        pass
     return run
