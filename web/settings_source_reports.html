@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Source reports · TradingAgents</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --text: #e7eef7;
+      --muted: #8b9bb0;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+      --bad: #f07178;
+      --line: #2a3542;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1b2a3d, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem 0.4rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      align-items: baseline;
+    }
+    h1 { margin: 0; font-size: 1.35rem; }
+    h1 span { color: var(--accent); }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    a { color: var(--accent); }
+    main {
+      padding: 0.75rem 1.5rem 2rem;
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 1rem;
+    }
+    @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+    section {
+      background: color-mix(in srgb, var(--panel) 92%, black);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem 1.1rem 1.2rem;
+    }
+    h2 {
+      margin: 0 0 0.75rem;
+      font-size: 0.95rem;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.4rem 0.3rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; }
+    .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.78rem; word-break: break-all; }
+    .err { color: var(--bad); }
+    .pill { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.75rem; background: #1e3a2f; color: var(--ok); }
+    .pill.bad { background: #3a2428; color: var(--bad); }
+    ul.urls { margin: 0; padding-left: 1.1rem; }
+    ul.urls li { margin: 0.25rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1><span id="titleName">Source</span> · comparison reports</h1>
+      <div class="meta" id="subtitle">…</div>
+    </div>
+    <div class="meta">
+      <a href="/settings/sources">← Settings</a>
+      · <a href="/" target="_blank" rel="noopener">Home</a>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Reports that used this source</h2>
+      <p class="meta" id="status">Loading…</p>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Ticker</th>
+              <th>Compare</th>
+              <th>Links</th>
+              <th>Parsed hit(s)</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+    <section>
+      <h2>Remembered source material URLs</h2>
+      <p class="meta">Direct URLs gathered/parsed when this source contributed.</p>
+      <ul class="urls" id="urlList"></ul>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function shortTs(ts) {
+      if (!ts) return '—';
+      return String(ts).replace('T', ' ').slice(0, 19);
+    }
+    function sourceIdFromPath() {
+      const m = location.pathname.match(/\/settings\/sources\/([^/]+)\/reports\/?$/);
+      return m ? decodeURIComponent(m[1]) : '';
+    }
+    async function api(path) {
+      const res = await fetch(path);
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 && data.login) {
+        location.href = data.login;
+        throw new Error('login');
+      }
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+    (async () => {
+      const id = sourceIdFromPath();
+      if (!id) {
+        $('status').innerHTML = '<span class="err">Missing source id</span>';
+        return;
+      }
+      const data = await api('/api/settings/sources/' + encodeURIComponent(id) + '/reports');
+      const src = data.source || {};
+      const name = src.display_name || src.name || id;
+      document.title = name + ' · reports · TradingAgents';
+      $('titleName').textContent = name;
+      const freq = src.frequency || {};
+      $('subtitle').textContent =
+        `${src.group || 'source'} · uses ${(src.stats || {}).use_count || 0} · today ${freq.today || 0} · week ${freq.this_week || 0}`;
+      const reports = data.reports || [];
+      $('status').textContent = `${reports.length} comparison run(s)`;
+      $('tbody').innerHTML = reports.map(r => {
+        if (r.missing) {
+          return `<tr><td colspan="5" class="meta">Missing run ${esc(r.id)}</td></tr>`;
+        }
+        const hits = (r.hits || []).map(h => {
+          const flag = h.ok ? 'ok' : (h.skipped ? 'skip' : '?');
+          return `<div class="mono"><a href="${esc(h.url || '#')}" target="_blank" rel="noopener">${esc(h.url || '—')}</a> · ${esc(flag)}</div>`;
+        }).join('') || '<span class="meta">—</span>';
+        const links = [
+          r.run_url ? `<a href="${esc(r.run_url)}" target="_blank" rel="noopener">run</a>` : '',
+          r.report_url ? `<a href="${esc(r.report_url)}" target="_blank" rel="noopener">report</a>` : ''
+        ].filter(Boolean).join(' · ') || '—';
+        const st = r.compare_status || r.status || '?';
+        const pill = (st === 'ok') ? 'pill' : 'pill bad';
+        return `<tr>
+          <td>${esc(shortTs(r.created_at))}</td>
+          <td><strong>${esc(r.ticker || '—')}</strong></td>
+          <td><span class="${pill}">${esc(st)}</span></td>
+          <td>${links}</td>
+          <td>${hits}</td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="5" class="meta">No comparison reports remembered for this source yet. Run Backfill on Settings.</td></tr>`;
+
+      const urls = data.parsed_urls || [];
+      $('urlList').innerHTML = urls.map(u => {
+        const ok = u.ok === true ? 'ok' : (u.ok === false ? 'fail/skip' : '');
+        return `<li class="mono"><a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>
+          <span class="meta"> · ×${esc(u.count || 1)}${ok ? ' · ' + ok : ''} · ${esc(shortTs(u.last_seen))}</span></li>`;
+      }).join('') || '<li class="meta">None remembered yet.</li>';
+    })().catch(e => {
+      if (e.message !== 'login') $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    });
+  </script>
+</body>
+</html>

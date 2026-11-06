@@ -23,7 +23,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from .sources import ANALYST_FOCUS_NAMES, source_catalog
+from .source_registry import effective_source_catalog
+from .sources import ANALYST_FOCUS_NAMES
 
 _UA = (
     "Mozilla/5.0 (compatible; TradingAgentsMarketCompare/1.0; "
@@ -155,7 +156,7 @@ def _env_key(*names: str) -> str | None:
 
 def fetch_page_snippets(ticker: str, *, max_pages: int = 22) -> list[dict[str, Any]]:
     """Best-effort public page snippets with cache + skip-on-paywall."""
-    catalog = source_catalog(ticker)
+    catalog = effective_source_catalog(ticker)
     # Prefer ratings / analyst narrative, then technicals, then desks.
     priority = (
         "analyst",
@@ -357,7 +358,7 @@ def _parse_json_object(text: str) -> dict | None:
 
 def gather_market_views(ticker: str) -> dict[str, Any]:
     ticker = (ticker or "").strip().upper()
-    sources = source_catalog(ticker)
+    sources = effective_source_catalog(ticker)
     pages = fetch_page_snippets(ticker)
     research = perplexity_research(ticker, sources)
     skipped = [p for p in pages if p.get("skipped")]

@@ -43,6 +43,7 @@ from tradingagents.market_compare.render import (
     render_market_compare_section,
     render_report_compare_banner,
 )
+from tradingagents.market_compare import source_registry as compare_sources
 from tradingagents.site_run_limits import (
     DEFAULT_MAX_ANALYSES_PER_TICKER_DAY,
     run_day_key,
@@ -73,6 +74,9 @@ ACCOUNT_COOKIE = "tradingagents_account"
 SESSION_HOURS = 12
 RUNS_DIR = ROOT / "data" / "site_runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
+# Keep compare-source registry under this site's data/ tree.
+os.environ.setdefault("TRADINGAGENTS_ROOT", str(ROOT))
+os.environ.setdefault("TRADINGAGENTS_RUNS_DIR", str(RUNS_DIR))
 WEB_DIR = ROOT / "web"
 LOG_DIR = ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -994,6 +998,68 @@ class Handler(BaseHTTPRequestHandler):
             self._html(web_text("index.html"))
             return
 
+        if path in ("/settings", "/settings/", "/settings/sources"):
+            if not self._require_session(api=False):
+                return
+            self._html(web_text("settings.html"))
+            return
+
+        m = re.fullmatch(r"/settings/sources/([^/]+)/reports/?", path)
+        if m:
+            if not self._require_session(api=False):
+                return
+            # Dedicated full-page popup list of compares that used this source.
+            self._html(web_text("settings_source_reports.html"))
+            return
+
+        if path == "/api/settings/sources":
+            if not self._require_session(api=True):
+                return
+            rows = compare_sources.list_sources(include_disabled=True)
+            enriched = []
+            for row in rows:
+                item = dict(row)
+                item["frequency"] = compare_sources.frequency_summary(row.get("stats") or {})
+                item["reports_url"] = f"/settings/sources/{row.get('id')}/reports"
+                enriched.append(item)
+            store = compare_sources.load_store()
+            self._json(
+                {
+                    "ok": True,
+                    "sources": enriched,
+                    "backfilled_at": store.get("backfilled_at"),
+                    "updated_at": store.get("updated_at"),
+                    "count": len(enriched),
+                }
+            )
+            return
+
+        m = re.fullmatch(r"/api/settings/sources/([^/]+)/reports", path)
+        if m:
+            if not self._require_session(api=True):
+                return
+            try:
+                payload = compare_sources.source_reports(m.group(1))
+            except KeyError as exc:
+                self._json({"error": str(exc)}, status=404)
+                return
+            self._json({"ok": True, **payload})
+            return
+
+        m = re.fullmatch(r"/api/settings/sources/([^/]+)/?", path)
+        if m:
+            if not self._require_session(api=True):
+                return
+            src = compare_sources.get_source(m.group(1))
+            if not src:
+                self._json({"error": "source not found"}, status=404)
+                return
+            src = dict(src)
+            src["frequency"] = compare_sources.frequency_summary(src.get("stats") or {})
+            src["reports_url"] = f"/settings/sources/{src.get('id')}/reports"
+            self._json({"ok": True, "source": src})
+            return
+
         self._json({"error": "not found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -1024,6 +1090,44 @@ class Handler(BaseHTTPRequestHandler):
                     "market_compare": (queued or run).get("market_compare"),
                 }
             )
+            return
+
+        if path == "/api/settings/sources/backfill":
+            user = self._require_session(api=True)
+            if not user:
+                return
+            try:
+                body = self._read_json()
+            except json.JSONDecodeError:
+                body = {}
+            limit = body.get("limit")
+            try:
+                limit_i = int(limit) if limit is not None else None
+            except (TypeError, ValueError):
+                limit_i = None
+            reset = bool(body.get("reset_stats", True))
+            result = compare_sources.backfill_from_runs(limit=limit_i, reset_stats=reset)
+            self._json(result)
+            return
+
+        m = re.fullmatch(r"/api/settings/sources/([^/]+)/?", path)
+        if m:
+            user = self._require_session(api=True)
+            if not user:
+                return
+            try:
+                body = self._read_json()
+            except json.JSONDecodeError as exc:
+                self._json({"error": f"invalid JSON: {exc}"}, status=422)
+                return
+            try:
+                updated = compare_sources.update_source(m.group(1), body if isinstance(body, dict) else {})
+            except KeyError as exc:
+                self._json({"error": str(exc)}, status=404)
+                return
+            updated = dict(updated)
+            updated["frequency"] = compare_sources.frequency_summary(updated.get("stats") or {})
+            self._json({"ok": True, "source": updated})
             return
 
         if path not in ("/api/analyze", "/api/reports/refresh", "/api/ticker/refresh"):

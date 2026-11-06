@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Settings · TradingAgents</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --text: #e7eef7;
+      --muted: #8b9bb0;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+      --bad: #f07178;
+      --line: #2a3542;
+      --warn: #e6c07b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1b2a3d, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.5rem 2rem 0.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.6rem; }
+    h1 span { color: var(--accent); }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    a { color: var(--accent); }
+    main { padding: 1rem 2rem 2rem; }
+    section {
+      background: color-mix(in srgb, var(--panel) 92%, black);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem 1.1rem 1.2rem;
+    }
+    h2 {
+      margin: 0 0 0.8rem;
+      font-size: 1rem;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      align-items: center;
+      margin: 0 0 0.85rem;
+    }
+    .toolbar .meta { margin: 0; flex: 1; }
+    button, .btn {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, #4aa3f5, #2f7fd0);
+      color: var(--text);
+      padding: 0.45rem 0.85rem;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    button.secondary, .btn.secondary {
+      background: #1c2733;
+      font-weight: 500;
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .err { color: var(--bad); }
+    .ok { color: var(--ok); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.45rem 0.35rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+    tr.disabled td { opacity: 0.55; }
+    .pill {
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+    }
+    .on { background: #1e3a2f; color: var(--ok); }
+    .off { background: #3a2428; color: var(--bad); }
+    .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.78rem; word-break: break-all; }
+    dialog {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #121820;
+      color: var(--text);
+      padding: 1rem 1.1rem;
+      width: min(560px, 94vw);
+    }
+    dialog::backdrop { background: rgba(0,0,0,0.55); }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 0.55rem 0 0.25rem; }
+    input, textarea, select {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #0c1117;
+      color: var(--text);
+      padding: 0.5rem 0.65rem;
+      font: inherit;
+    }
+    textarea { min-height: 72px; resize: vertical; }
+    .dialog-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+    .nav-home { color: var(--muted); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1><span>Settings</span> · compare sources</h1>
+      <div class="meta">Market-analyst gather sources (ROBIN-1906 / 1895)</div>
+    </div>
+    <div class="meta">
+      <a class="nav-home" href="/">← Home</a>
+      · <span id="viewer">…</span>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Sources</h2>
+      <div class="toolbar">
+        <p class="meta" id="status">Loading…</p>
+        <button type="button" class="secondary" id="refreshBtn">Refresh</button>
+        <button type="button" id="backfillBtn">Backfill from runs</button>
+      </div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Group</th>
+              <th>Added</th>
+              <th>URL template</th>
+              <th>Sample</th>
+              <th>Last used</th>
+              <th>Uses</th>
+              <th>Today / week</th>
+              <th>Enabled</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="editDlg">
+    <form method="dialog" id="editForm">
+      <h2 style="text-transform:none;letter-spacing:0;color:var(--text)">Edit source</h2>
+      <input type="hidden" id="editId" />
+      <label for="editDisplay">Display name</label>
+      <input id="editDisplay" required />
+      <label for="editGroup">Group</label>
+      <input id="editGroup" />
+      <label for="editTemplate">URL template <span class="meta">({TICKER} / {ticker})</span></label>
+      <input id="editTemplate" class="mono" />
+      <label for="editSample">Usable sample URL</label>
+      <input id="editSample" class="mono" />
+      <label for="editNotes">Notes</label>
+      <textarea id="editNotes"></textarea>
+      <label><input type="checkbox" id="editEnabled" style="width:auto;margin-right:0.4rem" /> Enabled for compares</label>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="editCancel">Cancel</button>
+        <button type="submit" id="editSave">Save</button>
+      </div>
+      <p class="meta err" id="editErr" hidden></p>
+    </form>
+  </dialog>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let sourcesCache = [];
+
+    async function api(path, opts) {
+      const res = await fetch(path, opts);
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 && data.login) {
+        location.href = data.login;
+        throw new Error('login');
+      }
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function shortTs(ts) {
+      if (!ts) return '—';
+      return String(ts).replace('T', ' ').slice(0, 19);
+    }
+
+    function renderRows(rows) {
+      sourcesCache = rows || [];
+      $('tbody').innerHTML = sourcesCache.map(s => {
+        const freq = s.frequency || {};
+        const enabled = s.enabled !== false;
+        const name = s.display_name || s.name || s.id;
+        return `<tr class="${enabled ? '' : 'disabled'}" data-id="${esc(s.id)}">
+          <td><strong>${esc(name)}</strong>${s.name && s.name !== name ? `<div class="meta mono">${esc(s.name)}</div>` : ''}</td>
+          <td>${esc(s.group || '—')}</td>
+          <td>${esc(shortTs(s.added_at))}</td>
+          <td class="mono">${esc(s.url_template || '—')}</td>
+          <td class="mono">${s.sample_url ? `<a href="${esc(s.sample_url)}" target="_blank" rel="noopener">${esc(s.sample_url)}</a>` : '—'}</td>
+          <td>${esc(shortTs((s.stats || {}).last_used_at))}</td>
+          <td>${esc((s.stats || {}).use_count || 0)}</td>
+          <td>${esc(freq.today || 0)} / ${esc(freq.this_week || 0)}</td>
+          <td><span class="pill ${enabled ? 'on' : 'off'}">${enabled ? 'on' : 'off'}</span></td>
+          <td style="white-space:nowrap">
+            <button type="button" class="secondary editBtn" data-id="${esc(s.id)}">Edit</button>
+            <a class="btn secondary" href="/settings/sources/${esc(s.id)}/reports" target="_blank" rel="noopener">Reports</a>
+          </td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="10" class="meta">No sources yet.</td></tr>`;
+      document.querySelectorAll('.editBtn').forEach(btn => {
+        btn.onclick = () => openEdit(btn.getAttribute('data-id'));
+      });
+    }
+
+    async function loadSources() {
+      $('status').textContent = 'Loading…';
+      const data = await api('/api/settings/sources');
+      renderRows(data.sources || []);
+      const bf = data.backfilled_at ? ` · backfilled ${shortTs(data.backfilled_at)}` : ' · not backfilled yet';
+      $('status').textContent = `${data.count || 0} sources${bf}`;
+    }
+
+    function openEdit(id) {
+      const s = sourcesCache.find(x => x.id === id);
+      if (!s) return;
+      $('editId').value = s.id;
+      $('editDisplay').value = s.display_name || s.name || '';
+      $('editGroup').value = s.group || '';
+      $('editTemplate').value = s.url_template || '';
+      $('editSample').value = s.sample_url || '';
+      $('editNotes').value = s.notes || '';
+      $('editEnabled').checked = s.enabled !== false;
+      $('editErr').hidden = true;
+      $('editDlg').showModal();
+    }
+
+    $('editCancel').onclick = () => $('editDlg').close();
+    $('editForm').onsubmit = async (e) => {
+      e.preventDefault();
+      $('editErr').hidden = true;
+      $('editSave').disabled = true;
+      try {
+        await api('/api/settings/sources/' + encodeURIComponent($('editId').value), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            display_name: $('editDisplay').value,
+            group: $('editGroup').value,
+            url_template: $('editTemplate').value,
+            sample_url: $('editSample').value,
+            notes: $('editNotes').value,
+            enabled: $('editEnabled').checked
+          })
+        });
+        $('editDlg').close();
+        await loadSources();
+      } catch (err) {
+        $('editErr').hidden = false;
+        $('editErr').textContent = err.message;
+      } finally {
+        $('editSave').disabled = false;
+      }
+    };
+
+    $('refreshBtn').onclick = () => loadSources().catch(e => {
+      if (e.message !== 'login') $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    });
+
+    $('backfillBtn').onclick = async () => {
+      $('backfillBtn').disabled = true;
+      $('status').textContent = 'Backfilling usage from site runs…';
+      try {
+        const data = await api('/api/settings/sources/backfill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reset_stats: true })
+        });
+        await loadSources();
+        $('status').innerHTML =
+          `<span class="ok">Backfilled</span> · scanned ${esc(data.scanned_runs)} runs · ` +
+          `${esc(data.compare_runs)} with compare · ${esc(data.sources)} sources`;
+      } catch (e) {
+        if (e.message !== 'login') $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+      } finally {
+        $('backfillBtn').disabled = false;
+      }
+    };
+
+    (async () => {
+      try {
+        const acct = await api('/api/accounts');
+        $('viewer').textContent = (acct.viewer && acct.viewer.email) || '';
+      } catch (_e) {}
+      await loadSources();
+    })().catch(e => {
+      if (e.message !== 'login') $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    });
+  </script>
+</body>
+</html>
