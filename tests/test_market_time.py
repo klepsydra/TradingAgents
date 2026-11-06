@@ -42,3 +42,21 @@ def test_parse_analysis_date_accepts_operator_today(monkeypatch):
     assert prompts.parse_analysis_date("2026-10-28") == "2026-10-28"
     with pytest.raises(ValueError, match="future"):
         prompts.parse_analysis_date((today + timedelta(days=1)).isoformat())
+
+
+@pytest.mark.unit
+def test_format_local_converts_utc_to_pacific(monkeypatch):
+    monkeypatch.delenv("TRADINGAGENTS_MARKET_TZ", raising=False)
+    monkeypatch.setenv("AGENTROBIN_TIMEZONE", "America/Los_Angeles")
+    # 21:20:36Z → 13:20:36 PST (UTC-8) in November
+    assert (
+        market_time.format_local("2026-11-06T21:20:36+00:00")
+        == "2026-11-06 13:20:36"
+    )
+    assert (
+        market_time.format_local("2026-11-06T21:20:36Z")
+        == "2026-11-06 13:20:36"
+    )
+    stamped = market_time.format_local("2026-11-06T21:20:36Z", with_tz_name=True)
+    assert stamped.startswith("2026-11-06 13:20:36 ")
+    assert "P" in stamped  # PST or PDT

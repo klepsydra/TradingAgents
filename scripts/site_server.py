@@ -37,7 +37,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from tradingagents.market_time import market_today_iso, market_tz
+from tradingagents.market_time import format_local, market_today_iso, market_tz, market_tz_name
 from tradingagents.market_compare.pipeline import run_market_compare
 from tradingagents.market_compare.render import (
     render_market_compare_section,
@@ -166,7 +166,12 @@ def analysis_date_today() -> str:
 
 
 def web_text(name: str) -> str:
-    return (WEB_DIR / name).read_text(encoding="utf-8")
+    """Load a web template and inject the operator timezone for client formatting."""
+    return (
+        (WEB_DIR / name)
+        .read_text(encoding="utf-8")
+        .replace("__SITE_TZ__", market_tz_name())
+    )
 
 
 def run_path(run_id: str) -> Path:
@@ -206,13 +211,20 @@ def summarize_run(run: dict) -> dict:
     """Compact fields for tables / API lists."""
     run_id = run.get("id")
     report_path = f"/runs/{run_id}/report" if run_id and (run.get("report_html") or run.get("report_md")) else None
+    created = run.get("created_at")
+    finished = run.get("finished_at")
     out = {
         "id": run_id,
         "status": run.get("status"),
         "ticker": run.get("ticker"),
         "account": run.get("account"),
-        "created_at": run.get("created_at"),
-        "finished_at": run.get("finished_at"),
+        "created_at": created,
+        "finished_at": finished,
+        # Display wall times in AGENTROBIN_TIMEZONE / TZ (Pacific by default).
+        "when": format_local(created) or None,
+        "created_at_local": format_local(created) or None,
+        "finished_at_local": format_local(finished) or None,
+        "timezone": market_tz_name(),
         "viewer": run.get("viewer"),
         "rating": run.get("rating"),
         "conclusion": (run.get("conclusion") or "")[:280],
@@ -741,6 +753,7 @@ class Handler(BaseHTTPRequestHandler):
             "run": run,
             "past": past,
             "viewer": self._session_user() or {},
+            "timezone": market_tz_name(),
         }
         page = tpl.replace("__BOOTSTRAP__", json.dumps(payload))
         return page.replace("<!--__MARKET_COMPARE__-->", render_market_compare_section(run))
@@ -768,7 +781,15 @@ class Handler(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed.query)
 
         if path == "/healthz":
-            self._json({"ok": True, "service": "tradingagents-site", "at": iso_now()})
+            self._json(
+                {
+                    "ok": True,
+                    "service": "tradingagents-site",
+                    "at": iso_now(),
+                    "timezone": market_tz_name(),
+                    "local_now": format_local(iso_now()),
+                }
+            )
             return
 
         if path == "/sso/callback":
@@ -841,6 +862,7 @@ class Handler(BaseHTTPRequestHandler):
                         "accounts": accounts,
                         "viewer": self._session_user(),
                         "sticky_account": self._sticky_account(),
+                        "timezone": market_tz_name(),
                     }
                 )
             except Exception as exc:  # noqa: BLE001
