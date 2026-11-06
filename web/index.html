@@ -18,14 +18,22 @@
       --warn: #e6c07b;
     }
     * { box-sizing: border-box; }
+    html {
+      height: 100%;
+    }
     body {
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       background: radial-gradient(1200px 600px at 10% -10%, #1b2a3d, var(--bg));
       color: var(--text);
-      min-height: 100vh;
+      height: 100%;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
     header {
+      flex: 0 0 auto;
       padding: 1.5rem 2rem 0.5rem;
       display: flex;
       justify-content: space-between;
@@ -36,12 +44,42 @@
     h1 span { color: var(--accent); }
     .meta { color: var(--muted); font-size: 0.9rem; }
     main {
+      flex: 1 1 auto;
+      min-height: 0;
       display: grid;
       grid-template-columns: 1.1fr 1fr;
       gap: 1rem;
       padding: 1rem 2rem 2rem;
+      overflow: hidden;
+      align-items: stretch;
     }
-    @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+    /* Each side scrolls on its own via mouse wheel; body stays put. */
+    main > section {
+      min-height: 0;
+      max-height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    @media (max-width: 960px) {
+      body {
+        height: auto;
+        min-height: 100dvh;
+        overflow: auto;
+        display: block;
+      }
+      main {
+        grid-template-columns: 1fr;
+        height: auto;
+        min-height: 0;
+        overflow: visible;
+      }
+      main > section {
+        max-height: none;
+        overflow: visible;
+      }
+    }
     section {
       background: color-mix(in srgb, var(--panel) 92%, black);
       border: 1px solid var(--line);
@@ -104,10 +142,10 @@
     details.past > summary::before { content: "▸ "; color: var(--accent); }
     details.past[open] > summary::before { content: "▾ "; }
 
+    /* Portfolio rides the left column scroll (no nested pane) so picking a
+       holding does not fight a second scrollbar or the page chrome. */
     #portfolio {
       margin: 0;
-      max-height: 320px;
-      overflow: auto;
       background: #0c1117;
       border-radius: 8px;
       padding: 0.55rem 0.65rem;
@@ -389,6 +427,9 @@
       markActiveHolding(sym);
       loadPastForTicker(sym);
       loadRuns(sym);
+      // Keep Recent runs in view: scroll the right column only (not the page).
+      const runsCol = document.querySelector('main > section:last-of-type');
+      if (runsCol) runsCol.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     function renderPortfolioBook(p, sourceLabel) {
