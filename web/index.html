@@ -333,6 +333,9 @@
     const $ = (id) => document.getElementById(id);
     const ACCOUNT_KEY = 'tradingagents_last_account';
     const WATCHLIST_KEY = 'tradingagents_last_watchlist';
+    // Injected by site_server from TRADINGAGENTS_MARKET_TZ / AGENTROBIN_TIMEZONE / TZ.
+    let SITE_TZ = '__SITE_TZ__';
+    if (!SITE_TZ || SITE_TZ.indexOf('__') === 0) SITE_TZ = 'America/Los_Angeles';
     let runsTable = null;
     let runsFilterTicker = '';
     let watchlistsCache = [];
@@ -359,6 +362,23 @@
 
     function esc(s) {
       return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    /** Wall clock in SITE_TZ (Pacific by default) — never raw UTC slice. */
+    function fmtTs(iso, empty) {
+      if (!iso) return empty == null ? '—' : empty;
+      if (typeof iso === 'string' && iso.indexOf('T') < 0 && /^\d{4}-\d{2}-\d{2} /.test(iso)) {
+        return iso.slice(0, 19); // already local from API `when`
+      }
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) {
+        return String(iso).replace('T', ' ').replace(/Z$/, '').slice(0, 19);
+      }
+      try {
+        return d.toLocaleString('sv-SE', { timeZone: SITE_TZ || 'America/Los_Angeles' });
+      } catch (_) {
+        return d.toISOString().replace('T', ' ').slice(0, 19);
+      }
     }
 
     function currentTicker() {
@@ -505,7 +525,7 @@
         <thead><tr><th>When</th><th>Rating</th><th>Account</th><th>Status</th><th>Conclusion</th><th>Links</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr>
-            <td><a href="/runs/${esc(r.id)}">${esc((r.created_at || '').replace('T',' ').slice(0,19))}</a></td>
+            <td><a href="/runs/${esc(r.id)}">${esc(r.when || fmtTs(r.created_at))}</a></td>
             <td><strong>${esc(r.rating || '—')}</strong></td>
             <td>${esc(r.account || '—')}</td>
             <td>${pill(r.status)}</td>
@@ -620,7 +640,7 @@
     function mapRunRow(r) {
       return {
         id: r.id,
-        when: (r.created_at || '').replace('T', ' ').slice(0, 19),
+        when: r.when || fmtTs(r.created_at, ''),
         ticker: r.ticker || '',
         rating: r.rating || '—',
         account: r.account || '—',
@@ -764,7 +784,7 @@
         await loadRuns(ticker);
         await loadPastForTicker(ticker);
         scheduleRunsPoll();
-        const when = (run.created_at || '').replace('T', ' ').slice(0, 19) || 'just now';
+        const when = run.when || fmtTs(run.created_at, '') || 'just now';
         let statusLine =
           `Queued <strong>${esc(ticker)}</strong> · ${pill(run.status || 'queued')} · ${esc(when)}`;
         if (data.coalesced) {
@@ -800,6 +820,7 @@
 
     (async () => {
       const data = await api('/api/accounts');
+      if (data.timezone) SITE_TZ = data.timezone;
       $('viewer').textContent = (data.viewer && data.viewer.email) || '';
       let watchlists = [];
       try {
