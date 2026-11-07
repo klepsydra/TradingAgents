@@ -115,7 +115,8 @@ Environment=PYTHONUNBUFFERED=1
 # Load LLM keys without printing them
 EnvironmentFile=-$ROOT/.env
 ExecStart=$PYTHON_BIN $ROOT/scripts/site_server.py
-Restart=always
+# on-failure so a healthy /healthz (exit 0) does not Restart= into a bind loop.
+Restart=on-failure
 RestartSec=5
 
 [Install]

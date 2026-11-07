@@ -18,7 +18,9 @@ Environment=TZ=America/Los_Angeles
 # Load LLM keys without printing them
 EnvironmentFile=-/home/marckoby/dev/TradingAgents/.env
 ExecStart=/home/marckoby/dev/TradingAgents/.venv/bin/python3 /home/marckoby/dev/TradingAgents/scripts/site_server.py
-Restart=always
+# on-failure: a healthy listener already answering /healthz exits 0 (see
+# site_server.bind_site_server). Restart=always would spin that into auto-restart.
+Restart=on-failure
 RestartSec=5
 
 [Install]

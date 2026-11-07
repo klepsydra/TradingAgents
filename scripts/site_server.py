@@ -21,6 +21,8 @@ Service token: TRADINGAGENTS_SERVICE_TOKEN or AGENTROBIN_TRADINGAGENTS_BRIDGE_TO
 from __future__ import annotations
 
 import base64
+import contextlib
+import errno
 import hashlib
 import hmac
 import html
@@ -28,10 +30,13 @@ import json
 import os
 import re
 import secrets
+import signal
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1214,9 +1219,199 @@ class Handler(BaseHTTPRequestHandler):
         self._json(payload)
 
 
+def _ipv4_from_proc_hex(ip_hex: str) -> str:
+    raw = bytes.fromhex(ip_hex)
+    return ".".join(str(b) for b in reversed(raw))
+
+
+def parse_listen_inodes(proc_net: str, port: int, bind_ip: str | None = None) -> set[str]:
+    """Socket inodes in TCP_LISTEN for ``port``.
+
+    ``bind_ip`` limits IPv4 rows to that address or ``0.0.0.0``. IPv6 rows
+    (32 hex chars) are kept whenever the port matches; callers pass
+    ``bind_ip=None`` for ``/proc/net/tcp6``.
+    """
+    inodes: set[str] = set()
+    for line in proc_net.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 10:
+            continue
+        local, state, inode = parts[1], parts[3], parts[9]
+        try:
+            ip_hex, port_hex = local.split(":")
+            if int(port_hex, 16) != port or state != "0A":
+                continue
+        except ValueError:
+            continue
+        if bind_ip and len(ip_hex) == 8:
+            ip = _ipv4_from_proc_hex(ip_hex)
+            if ip not in {bind_ip, "0.0.0.0"}:
+                continue
+        if inode and inode != "0":
+            inodes.add(inode)
+    return inodes
+
+
+def pids_for_socket_inodes(inodes: set[str], proc_root: Path | None = None) -> list[int]:
+    if not inodes:
+        return []
+    root = proc_root or Path("/proc")
+    found: list[int] = []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        fd_dir = entry / "fd"
+        try:
+            fds = list(fd_dir.iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if (
+                target.startswith("socket:[")
+                and target.endswith("]")
+                and target[8:-1] in inodes
+            ):
+                found.append(int(entry.name))
+                break
+    return found
+
+
+def process_cmdline(pid: int, proc_root: Path | None = None) -> str:
+    root = proc_root or Path("/proc")
+    try:
+        data = (root / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return ""
+    return data.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+
+
+def process_cwd(pid: int, proc_root: Path | None = None) -> str:
+    root = proc_root or Path("/proc")
+    try:
+        return os.readlink(root / str(pid) / "cwd")
+    except OSError:
+        return ""
+
+
+def is_our_site_server(pid: int, *, root: Path | None = None, proc_root: Path | None = None) -> bool:
+    """True when ``pid`` is this checkout's site_server, not an unrelated listener."""
+    if pid <= 1 or pid == os.getpid():
+        return False
+    repo = (root or ROOT).resolve()
+    cmd = process_cmdline(pid, proc_root)
+    if "site_server.py" not in cmd:
+        return False
+    script = str((repo / "scripts" / "site_server.py").resolve())
+    if script in cmd:
+        return True
+    cwd = process_cwd(pid, proc_root)
+    # Session launch: `.venv/bin/python scripts/site_server.py` with cwd = repo.
+    # That process is outside the systemd cgroup, so Restart= cannot reap it.
+    return "scripts/site_server.py" in cmd and cwd == str(repo)
+
+
+def listener_pids(bind: str, port: int, proc_root: Path | None = None) -> list[int]:
+    root = proc_root or Path("/proc")
+    inodes: set[str] = set()
+    for name, ip in (("net/tcp", bind), ("net/tcp6", None)):
+        try:
+            text = (root / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        inodes |= parse_listen_inodes(text, port, ip)
+    # Preserve order, drop duplicates.
+    seen: set[int] = set()
+    pids: list[int] = []
+    for pid in pids_for_socket_inodes(inodes, root):
+        if pid not in seen:
+            seen.add(pid)
+            pids.append(pid)
+    return pids
+
+
+def _pid_alive(pid: int, proc_root: Path | None = None) -> bool:
+    return ((proc_root or Path("/proc")) / str(pid)).exists()
+
+
+def healthz_ok(bind: str, port: int, timeout: float = 2.0) -> bool:
+    url = f"http://{bind}:{port}/healthz"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return int(resp.status) == 200
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+
+
+def reap_own_site_listener(
+    bind: str,
+    port: int,
+    *,
+    proc_root: Path | None = None,
+    kill=os.kill,
+    sleep=time.sleep,
+    wait_s: float = 5.0,
+) -> list[int]:
+    """Stop only this repo's site_server listeners so we can bind.
+
+    Unrelated processes that happen to hold the port are not signaled.
+    Returns the pids we tried to reap.
+    """
+    root = proc_root or Path("/proc")
+    pids = [
+        pid
+        for pid in listener_pids(bind, port, root)
+        if is_our_site_server(pid, proc_root=root)
+    ]
+    if not pids:
+        return []
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            kill(pid, signal.SIGTERM)
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        if all(not _pid_alive(pid, root) for pid in pids):
+            break
+        sleep(0.1)
+    for pid in pids:
+        if _pid_alive(pid, root):
+            with contextlib.suppress(OSError):
+                kill(pid, signal.SIGKILL)
+    sleep(0.2)
+    return pids
+
+
+def bind_site_server():
+    """Bind the site, after reaping an orphaned copy of ourselves.
+
+    If the port is still taken and ``/healthz`` is already 200, exit 0.
+    Combined with ``Restart=on-failure`` that does not spin auto-restart
+    while a healthy server is already listening.
+    """
+    reap_own_site_listener(BIND, PORT)
+    try:
+        return ThreadingHTTPServer((BIND, PORT), Handler)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE and healthz_ok(BIND, PORT):
+            print(
+                f"TradingAgents site already healthy on http://{BIND}:{PORT}/healthz; "
+                "leaving the existing listener in place",
+                flush=True,
+            )
+            raise SystemExit(0) from exc
+        raise
+
+
 def main() -> None:
     sso_secret()
-    httpd = ThreadingHTTPServer((BIND, PORT), Handler)
+    httpd = bind_site_server()
     print(f"TradingAgents site http://{BIND}:{PORT}/ → {PUBLIC_URL} auth={AUTH}", flush=True)
     httpd.serve_forever()
 
