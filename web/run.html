@@ -134,6 +134,8 @@
   <script>
     const BOOT = JSON.parse(document.getElementById('boot').textContent);
     const $ = (id) => document.getElementById(id);
+    let SITE_TZ = (BOOT && BOOT.timezone) || '__SITE_TZ__';
+    if (!SITE_TZ || SITE_TZ.indexOf('__') === 0) SITE_TZ = 'America/Los_Angeles';
 
     function pill(status) {
       const s = (status || '').toLowerCase();
@@ -143,6 +145,22 @@
 
     function esc(s) {
       return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function fmtTs(iso, empty) {
+      if (!iso) return empty == null ? '—' : empty;
+      if (typeof iso === 'string' && iso.indexOf('T') < 0 && /^\d{4}-\d{2}-\d{2} /.test(iso)) {
+        return iso.slice(0, 19);
+      }
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) {
+        return String(iso).replace('T', ' ').replace(/Z$/, '').slice(0, 19);
+      }
+      try {
+        return d.toLocaleString('sv-SE', { timeZone: SITE_TZ || 'America/Los_Angeles' });
+      } catch (_) {
+        return d.toISOString().replace('T', ' ').slice(0, 19);
+      }
     }
 
     function pastLinks(r) {
@@ -164,7 +182,7 @@
         <thead><tr><th>When</th><th>Rating</th><th>Account</th><th>Status</th><th>Conclusion</th><th>Links</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr>
-            <td><a href="/runs/${esc(r.id)}">${esc((r.created_at || '').replace('T',' ').slice(0,19))}</a></td>
+            <td><a href="/runs/${esc(r.id)}">${esc(r.when || fmtTs(r.created_at))}</a></td>
             <td><strong>${esc(r.rating || '—')}</strong></td>
             <td>${esc(r.account || '—')}</td>
             <td>${pill(r.status)}</td>
@@ -185,8 +203,8 @@
           : 'No conclusion captured yet.'
       );
       $('conclusionMeta').textContent = run.finished_at
-        ? `Finished ${run.finished_at}`
-        : (run.started_at ? `Started ${run.started_at}` : `Queued ${run.created_at || ''}`);
+        ? `Finished ${fmtTs(run.finished_at)}`
+        : (run.started_at ? `Started ${fmtTs(run.started_at)}` : `Queued ${fmtTs(run.created_at, '')}`);
       $('decision').textContent = run.decision || run.log || '—';
       $('log').textContent = [run.log, run.stderr, run.error].filter(Boolean).join('\n\n---\n\n') || '—';
       $('meta').innerHTML = [
@@ -194,8 +212,9 @@
         ['Account', run.account || '—'],
         ['Analysts', run.analysts || '—'],
         ['Viewer', run.viewer || '—'],
-        ['Created', run.created_at || '—'],
-        ['Finished', run.finished_at || '—'],
+        ['Timezone', SITE_TZ || '—'],
+        ['Created', fmtTs(run.created_at)],
+        ['Finished', fmtTs(run.finished_at)],
         ['Exit', run.exit_code ?? '—'],
       ].map(([k,v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
       if (run.report_url || run.report_html || run.has_report) {

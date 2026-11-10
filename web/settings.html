@@ -207,9 +207,22 @@
       return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
+    let SITE_TZ = '__SITE_TZ__';
+    if (!SITE_TZ || SITE_TZ.indexOf('__') === 0) SITE_TZ = 'America/Los_Angeles';
     function shortTs(ts) {
       if (!ts) return '—';
-      return String(ts).replace('T', ' ').slice(0, 19);
+      if (typeof ts === 'string' && ts.indexOf('T') < 0 && /^\d{4}-\d{2}-\d{2} /.test(ts)) {
+        return ts.slice(0, 19);
+      }
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) {
+        return String(ts).replace('T', ' ').replace(/Z$/, '').slice(0, 19);
+      }
+      try {
+        return d.toLocaleString('sv-SE', { timeZone: SITE_TZ || 'America/Los_Angeles' });
+      } catch (_) {
+        return d.toISOString().replace('T', ' ').slice(0, 19);
+      }
     }
 
     function renderRows(rows) {
@@ -316,6 +329,7 @@
     (async () => {
       try {
         const acct = await api('/api/accounts');
+        if (acct.timezone) SITE_TZ = acct.timezone;
         $('viewer').textContent = (acct.viewer && acct.viewer.email) || '';
       } catch (_e) {}
       await loadSources();
